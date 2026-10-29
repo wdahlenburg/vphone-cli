@@ -1721,7 +1721,7 @@ struct VPhoneCustomFirmwareInstaller {
         let bluetoothID = FirmwareGuestSystemPatchSet.virtualBluetooth
         let bluetoothPath = CustomFirmwareBluetoothVirtualController.relativePath
         isolate([bluetoothID]) {
-            if !version.hasPrefix("1"), on(bluetoothID) {
+            if on(bluetoothID) {
                 try patchCopy(
                     of: bluetoothPath, in: system, work: work,
                     verb: "patch-virtual-bluetooth", backupSafe: backupSafe(bluetoothID),

@@ -181,14 +181,14 @@ public enum FirmwareGuestSystemPatchSet {
                 title: "Virtual Bluetooth",
                 summary: "Turns on the feature flag that lets bluetoothd establish LE connections between guests over its Bonjour virtual controller.",
                 target: .guestFile(path: "/" + CustomFirmwareBluetoothVirtualController.relativePath),
-                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 26, minor: 0)),
+                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 18, minor: 0)),
             ),
             VPhonePatchDeclaration(
                 identifier: bluetoothAdvertisementPassup,
                 title: "Virtual Bluetooth app discovery",
                 summary: "Marks advertisements received from the virtual Bluetooth controller eligible for ordinary CoreBluetooth scan sessions.",
                 target: .guestExecutable(path: "/" + CustomFirmwareBluetoothAdvertisementPassup.relativePath),
-                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 26, minor: 0)),
+                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 18, minor: 0)),
             ),
             VPhonePatchDeclaration(
                 identifier: locationdCohorting,

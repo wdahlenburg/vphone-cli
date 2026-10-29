@@ -9,10 +9,17 @@ operations over VSOCK 1340.
 This is a research feature. The initial physical-device validation used an
 iOS 26.6.2 guest and an unmodified third-party app: discovery, application
 authentication, notifications and a firmware transfer worked. The patch
-declaration admits iOS 26 and later, including iOS 27 and newer. Each binary
+declaration permits checking iOS 18 and later, including iOS 27 and newer. Each
+binary
 must independently match the semantic patch patterns and runtime hook ABI;
-admission is not a claim that every version has been tested. iOS 18, Apple TV,
-HomePod and Watch physical bridging have not been ported.
+admission is not a claim that every version works. The iOS 26.5 capability-query
+layout is covered by regression tests; a booted 26.5 guest's generic scanning
+app reached poweredOn and discovered 17 nearby peripherals. Physical GATT
+connections on that version still need hardware validation. The actual iOS 18.6
+binary rejects the scan patch and lacks the native classes required by the hook; physical bridging
+on 18.6 needs a separate port. Xcode builds both Bluetooth guest components for
+iOS 18.0, but that does not supply the missing runtime interfaces. Apple TV,
+HomePod and Watch physical bridging have not been validated.
 
 ## Enable
 
@@ -65,14 +72,15 @@ as a whole typed field.
 - Bluetooth Classic, audio profiles and raw HCI/radio passthrough are outside
   this component. Physical pairing/encryption belongs to macOS, so guest pairing
   and security-level semantics are not reproduced exactly.
-- Concurrent peripherals, repeated/reordered connections and native BTVC peers
-  sharing the guest controller need further handle-correlation work. Start with
-  one guest app and one physical peripheral. A helper/guest-controller restart
+- Handles and peer addresses come from native BTVC connection-complete events;
+  lifetime identifiers reject replies for reused handles. Physical disconnects
+  and connection/discovery timeout failures request native controller cleanup.
+  Start with one guest app and one physical peripheral until concurrent-device
+  behavior has hardware coverage. A helper/guest-controller restart
   can require reconnecting the app; transparent recovery is not promised.
-- The same characteristic callback can represent a read or a notification in
-  CoreBluetooth; overlapping reads/subscriptions need further hardware testing.
-  Service Changed/database invalidation and disconnect propagation to the guest
-  controller also remain incomplete.
+- Reads of actively notifying characteristics return ATT Request Not Supported:
+  CoreBluetooth uses the same callback for reads and notifications without
+  request identity. Service Changed/database invalidation remains incomplete.
 
 This uses private Apple interfaces and an opt-in bluetoothd executable patch.
 Unknown binary patterns are rejected before writing, and unsupported Objective-C
@@ -112,8 +120,9 @@ xcodebuild -workspace VPhone.xcworkspace -scheme VPhone -configuration Debug -de
 
 Also run FirmwarePatcherTests for the Bluetooth feature flag and bundled
 patch-set catalogue. Tests cover packet framing, malformed lengths, UUID
-encoding, discovery ordering, MTU bounds, PCAP preservation, disconnect parsing
-and injection selection. They do not replace hardware tests of CoreBluetooth
+encoding, discovery ordering, MTU bounds, PCAP preservation, native connection
+identity, handle reuse, stale-reply rejection, disconnect routing and injection
+selection. They do not replace hardware tests of CoreBluetooth
 callbacks, writes under backpressure, security negotiation, multiple devices,
 service changes and reconnects. A useful report includes host/guest versions,
 bundle commit, peripheral model, exact failing operation and a sanitized trace.

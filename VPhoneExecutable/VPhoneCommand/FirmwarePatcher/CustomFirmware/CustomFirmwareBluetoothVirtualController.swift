@@ -461,21 +461,10 @@ public enum CustomFirmwareBluetoothAdvertisementPassup {
         }
 
         var capabilityMatches: [(state: Site.State, instruction: ARM64Instruction, storageOffset: Int32)] = []
-        for index in 0 ..< instructions.count - 2 {
-            let query = instructions[index]
-            let preserve = instructions[index + 1]
-            let store = instructions[index + 2]
-            guard preserve.mnemonic == "mov",
-                  registerName(preserve, 1) == "x0",
-                  store.mnemonic == "strb", registerName(store, 0) == "w0",
-                  let storeMemory = memory(store),
-                  storeMemory.disp == 0x808 || storeMemory.disp == 0x868 || storeMemory.disp == 0x878
-            else { continue }
-
-            let pristine = query.mnemonic == "bl" || query.mnemonic == "blr" || query.mnemonic == "blraa"
-            let forcedOne = isMoveOne(query) && registerName(query, 0) == "w0"
-            guard pristine || forcedOne else { continue }
-            capabilityMatches.append((pristine ? .pristine : .forcedOne, query, storeMemory.disp))
+        for storageOffset: Int32 in [0x808, 0x868, 0x878] {
+            for query in capabilityQueries(in: instructions, storageOffset: storageOffset) {
+                capabilityMatches.append((isMoveOne(query) ? .forcedOne : .pristine, query, storageOffset))
+            }
         }
         let extendedScanMatches = capabilityMatches.filter { $0.storageOffset == 0x808 }
         let scanSourceCapabilityMatches = capabilityMatches.filter { $0.storageOffset == 0x868 }
@@ -539,6 +528,38 @@ public enum CustomFirmwareBluetoothAdvertisementPassup {
                 offset: start + Int(passup.instruction.address - text.address),
             ),
         )
+    }
+
+    /// The compiler may preserve the result and materialize the global's page
+    /// between the query and byte store (26.5), or reuse its page register
+    /// (26.6). Only these instructions, neither of which clobbers w0, may
+    /// intervene. Never search backwards through arbitrary instructions.
+    static func capabilityQueries(in instructions: [ARM64Instruction], storageOffset: Int32) -> [ARM64Instruction] {
+        var matches: [ARM64Instruction] = []
+        for index in instructions.indices {
+            let query = instructions[index]
+            guard ["bl", "blr", "blraa"].contains(query.mnemonic)
+                    || (isMoveOne(query) && registerName(query, 0) == "w0") else { continue }
+            var next = index + 1
+            if next < instructions.count, instructions[next].mnemonic == "mov",
+               registerName(instructions[next], 1) == "x0",
+               let destination = registerName(instructions[next], 0), destination != "x0" {
+                next += 1
+            }
+            var pageRegister: String?
+            if next < instructions.count, instructions[next].mnemonic == "adrp",
+               let destination = registerName(instructions[next], 0), destination != "x0" {
+                pageRegister = destination
+                next += 1
+            }
+            guard next < instructions.count else { continue }
+            let store = instructions[next]
+            guard store.mnemonic == "strb", registerName(store, 0) == "w0",
+                  let location = memory(store), location.disp == storageOffset,
+                  pageRegister == nil || location.base.name == pageRegister else { continue }
+            matches.append(query)
+        }
+        return matches
     }
 
     private static func registerName(_ instruction: ARM64Instruction, _ index: Int) -> String? {
