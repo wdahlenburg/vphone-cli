@@ -121,6 +121,12 @@ HOMEPODMISFIX_INPUTS := $(HOMEPODMISFIX_SOURCES) MISFix/MISFixDetour.h MISFix/MI
 HOMEPODSETUP := $(STAGE)/homepodsetup/vphone-homepod-setup
 HOMEPODSETUP_SOURCES := $(call find_sources,HomePodSetup)
 HOMEPODSETUP_INPUTS := $(call find_headers,HomePodSetup) HomePodSetup/com.vphone.homepod-setup.plist
+BLUETOOTHBRIDGE := $(STAGE)/bluetoothbridge/vphone-bluetooth-bridge
+BLUETOOTHBRIDGE_SOURCES := $(call find_sources,BluetoothBridge)
+BLUETOOTHBRIDGE_INPUTS := $(call find_headers,BluetoothBridge) BluetoothBridge/com.vphone.bluetooth-bridge.plist
+BLUETOOTHCONTROLLER := $(STAGE)/bluetoothcontroller/libvphonebluetoothcontroller.dylib
+BLUETOOTHCONTROLLER_SOURCES := $(call find_sources,BluetoothController)
+BLUETOOTHCONTROLLER_INPUTS := $(call find_headers,BluetoothController) $(call find_folders,BluetoothController)
 TVSETUPFOCUS := $(STAGE)/tvsetupfocus/libvphonetvsetupfocus.dylib
 TVSETUPFOCUS_SOURCES := $(call find_sources,TVSetupFocus)
 TVSETUPFOCUS_INPUTS := $(call find_headers,TVSetupFocus) $(call find_folders,TVSetupFocus)
@@ -157,14 +163,14 @@ GPU_DYNAMIC_LOOKUP_SYMS := \
 VIRTIOSOUND := $(STAGE)/virtiosound/VPhoneVirtIOSound.driver
 VIRTIOSOUND_SOURCES := $(wildcard VirtIOSound/*.m VirtIOSound/*.c)
 VIRTIOSOUND_INCLUDES := $(wildcard VirtIOSound/*.h) VirtIOSound/Info.plist VirtIOSound/AudioServerDriver.tbd
-ARTIFACTS := $(CAMFIX) $(VCAMCAPTURED) $(LAUNCHHOOK) $(SYSTEMHOOK) $(MISFIX) $(HAPTICSFIX) $(BATTERYHEALTHFIX) $(DEVICEHUBFIX) $(DEVICENAME) $(PREFSFIX) $(SIGNINFIX) $(GYROSCOPE) $(ACCELEROMETER) $(HINGE) $(FOLDGUARD) $(FOLDDISPLAY) $(ATTITUDE) $(HOMEPODDISPLAY) $(CRYPTEXSTAGING) $(HOMEPODPERSONA) $(HOMEPODMISFIX) $(HOMEPODSETUP) $(TVSETUPFOCUS) $(GPU_PLUGIN) $(VIRTIOSOUND)
+ARTIFACTS := $(CAMFIX) $(VCAMCAPTURED) $(LAUNCHHOOK) $(SYSTEMHOOK) $(MISFIX) $(HAPTICSFIX) $(BATTERYHEALTHFIX) $(DEVICEHUBFIX) $(DEVICENAME) $(PREFSFIX) $(SIGNINFIX) $(GYROSCOPE) $(ACCELEROMETER) $(HINGE) $(FOLDGUARD) $(FOLDDISPLAY) $(ATTITUDE) $(HOMEPODDISPLAY) $(CRYPTEXSTAGING) $(HOMEPODPERSONA) $(HOMEPODMISFIX) $(HOMEPODSETUP) $(BLUETOOTHBRIDGE) $(BLUETOOTHCONTROLLER) $(TVSETUPFOCUS) $(GPU_PLUGIN) $(VIRTIOSOUND)
 PLISTS := $(STAGE)/camfix/libcamfix.plist $(STAGE)/vcamcaptured/libvcamcaptured.plist \
 	$(STAGE)/misfix/libmisfix.plist
 GPU_PROVENANCE := $(STAGE)/gpu/README.md
 
 # Directory timestamps also catch files removed from the wildcard inputs.
 
-.PHONY: all gpu package test-loader-links test-injection-environment test-devicename test-vcam-dataplane test-virtiosound test-x1-lowering clean
+.PHONY: all gpu package test-loader-links test-injection-environment test-devicename test-vcam-dataplane test-virtiosound test-x1-lowering test-bluetooth-controller clean
 
 all: $(ARTIFACTS) $(PLISTS) $(GPU_PROVENANCE)
 
@@ -203,7 +209,7 @@ gpu: $(GPU_PLUGIN)
 
 package: all
 	@rm -f $(ARCHIVE)
-	@/usr/bin/tar -cf $(ARCHIVE) -C $(STAGE) camfix vcamcaptured launchhook systemhook misfix hapticsfix batteryhealthfix devicehubfix devicename prefsfix signinfix gyroscope accelerometer hinge foldguard attitude homepoddisplay cryptexstaging homepodpersona homepodmisfix homepodsetup tvsetupfocus gpu virtiosound folddisplay
+	@/usr/bin/tar -cf $(ARCHIVE) -C $(STAGE) camfix vcamcaptured launchhook systemhook misfix hapticsfix batteryhealthfix devicehubfix devicename prefsfix signinfix gyroscope accelerometer hinge foldguard attitude homepoddisplay cryptexstaging homepodpersona homepodmisfix homepodsetup bluetoothbridge bluetoothcontroller tvsetupfocus gpu virtiosound folddisplay
 	@echo "Packaged $(ARCHIVE)"
 
 test-loader-links:
@@ -218,6 +224,13 @@ test-injection-environment:
 		-DVP_TEST_LIBRARY_DIR='"$(OUT)/injection-libraries"' \
 		-o $(OUT)/InjectionEnvironmentTests Tests/InjectionEnvironmentTests.c
 	@$(OUT)/InjectionEnvironmentTests
+
+test-bluetooth-controller:
+	@mkdir -p $(OUT)
+	xcrun --sdk macosx clang -Wall -Wextra -Werror -IBluetoothController \
+		-o $(OUT)/BluetoothControllerTests \
+		Tests/BluetoothControllerTests.c BluetoothController/VPhoneBluetoothHCICommand.c
+	@$(OUT)/BluetoothControllerTests
 
 test-x1-lowering:
 	@mkdir -p $(OUT)
@@ -474,6 +487,20 @@ $(HOMEPODSETUP): $(HOMEPODSETUP_SOURCES) $(HOMEPODSETUP_INPUTS)
 	xcrun --sdk appletvos clang -arch arm64e -mtvos-version-min=27.0 -Os -fobjc-arc \
 		-Wall -Wextra -Werror -o $@ $(HOMEPODSETUP_SOURCES) -framework Foundation
 	@cp HomePodSetup/com.vphone.homepod-setup.plist $(STAGE)/homepodsetup/
+	@codesign --force --sign - $@
+
+$(BLUETOOTHBRIDGE): $(BLUETOOTHBRIDGE_SOURCES) $(BLUETOOTHBRIDGE_INPUTS)
+	@mkdir -p $(STAGE)/bluetoothbridge
+	$(CLANG) $(COMMON_FLAGS) -Wall -Wextra -Werror -o $@ $(BLUETOOTHBRIDGE_SOURCES) -framework Foundation
+	@cp BluetoothBridge/com.vphone.bluetooth-bridge.plist $(STAGE)/bluetoothbridge/
+	@codesign --force --sign - $@
+
+$(BLUETOOTHCONTROLLER): $(BLUETOOTHCONTROLLER_SOURCES) $(BLUETOOTHCONTROLLER_INPUTS)
+	@mkdir -p $(STAGE)/bluetoothcontroller
+	$(CLANG) $(COMMON_FLAGS) -Wall -Wextra -Werror -dynamiclib \
+		-install_name /usr/lib/libvphonebluetoothcontroller.dylib \
+		-o $@ $(BLUETOOTHCONTROLLER_SOURCES) -framework Foundation \
+		-Wl,-not_for_dyld_shared_cache
 	@codesign --force --sign - $@
 
 .PHONY: test-homepod-setup

@@ -5,6 +5,20 @@ import VPhonePatchKit
 
 @Suite("Virtual Bluetooth feature flag")
 struct CustomFirmwareBluetoothVirtualControllerTests {
+    @Test
+    func `physical BLE discovery is opt in on iOS 26 and later`() throws {
+        let identifier = FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup
+        for base in ["18.6", "26.4", "26.6", "27.0", "27.2", "28.0"] {
+            for preset in [FirmwarePatchSetCatalog.standardPreset, FirmwarePatchSetCatalog.experimentalPreset] {
+                let plan = try VPhonePatchPlan.resolve(
+                    preset: preset, patchSets: FirmwarePatchSetCatalog.bundled,
+                    iOSBase: VPhoneVersion(base), cloudOS: VPhoneVersion("26.4")
+                )
+                #expect(plan.isEnabled(identifier) == (!base.hasPrefix("18.") && preset.identifier == "experimental"))
+            }
+        }
+    }
+
     @Test(arguments: [PropertyListSerialization.PropertyListFormat.xml, .binary])
     func `turns the feature on and keeps the rest`(format: PropertyListSerialization.PropertyListFormat) throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

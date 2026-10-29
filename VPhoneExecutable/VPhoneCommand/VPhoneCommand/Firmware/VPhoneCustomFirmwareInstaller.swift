@@ -1308,6 +1308,7 @@ struct VPhoneCustomFirmwareInstaller {
                     && identifier != FirmwareGuestSystemPatchSet.attitude
                     && identifier != FirmwareGuestSystemPatchSet.hinge
                     && identifier != FirmwareGuestSystemPatchSet.foldGuard
+                    && identifier != FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup
             }
             guard plan.isEnabled(identifier) else {
                 print("  [·] \(identifier): off in preset \(plan.presetIdentifier)")
@@ -1511,7 +1512,10 @@ struct VPhoneCustomFirmwareInstaller {
         //    keeps its old narrow rule under `environmentOnly`.
         isolate(["system-vphoned-boot-install"]) {
             if on("system-vphoned-boot-install") {
-                try installVphoned(guestDevice: guestDevice, system: system, work: work)
+                try installVphoned(
+                    guestDevice: guestDevice, system: system, work: work,
+                    bluetoothEnabled: plan?.isEnabled(FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup) == true
+                )
                 live.insert("system-vphoned-boot-install")
             }
         }
@@ -1728,6 +1732,33 @@ struct VPhoneCustomFirmwareInstaller {
             } else if priorGuest.contains(bluetoothID) {
                 print("  [!] \(bluetoothID): no backup to revert (not revertible)")
                 live.insert(bluetoothID)
+            }
+        }
+
+        let bluetoothPassupID = FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup
+        if FirmwareGuestSystemPatchSet.manifest.patches.first(where: {
+            $0.identifier == bluetoothPassupID
+        })?.applicability.matches(iOSBase: VPhoneVersion(version), cloudOS: nil) == true {
+            machO(
+                bluetoothPassupID,
+                path: CustomFirmwareBluetoothAdvertisementPassup.relativePath,
+                verbs: ["patch-bluetoothd-btvc-passup"],
+            )
+        } else if priorGuest.contains(bluetoothPassupID) {
+            // Keep the receipt honest outside the declared applicability
+            // if an existing machine changes its restored userland underneath it.
+            live.insert(bluetoothPassupID)
+        }
+
+        isolate([bluetoothPassupID]) {
+            let path = "usr/lib/libvphonebluetoothcontroller.dylib"
+            if live.contains(bluetoothPassupID) {
+                try system.replaceFile(
+                    path, fromFileAt: VPhoneGuestBinaries.resolve("libvphonebluetoothcontroller.dylib"),
+                    mode: 0o755, owner: Self.guestOwner
+                )
+            } else {
+                try system.removeItem(path)
             }
         }
 
@@ -2950,7 +2981,10 @@ struct VPhoneCustomFirmwareInstaller {
         ), mode: 0o644, owner: Self.guestOwner)
     }
 
-    private func installVphoned(guestDevice: VPhoneGuestDevice, system: VPhoneConfinedDirectory, work: WorkDirectory) throws {
+    private func installVphoned(
+        guestDevice: VPhoneGuestDevice, system: VPhoneConfinedDirectory,
+        work: WorkDirectory, bluetoothEnabled: Bool
+    ) throws {
         // Install the same signed bytes that vm launch uses for auto-update.
         // Re-signing here changes the binary hash and forces an upload and
         // daemon restart on the VM's first boot.
@@ -2973,6 +3007,27 @@ struct VPhoneCustomFirmwareInstaller {
             mode: 0o644,
             owner: Self.guestOwner,
         )
+        var bluetoothDaemon: URL?
+        if bluetoothEnabled && (guestDevice.family == .iPhone || guestDevice.family == .iPad) {
+            _ = try system.directory("usr/local/libexec", create: true, mode: 0o755)
+            try system.replaceFile(
+                "usr/local/libexec/vphone-bluetooth-bridge",
+                fromFileAt: VPhoneGuestBinaries.resolve("vphone-bluetooth-bridge"),
+                mode: 0o755,
+                owner: Self.guestOwner,
+            )
+            let daemon = resources.guestResources.appendingPathComponent("com.vphone.bluetooth-bridge.plist")
+            try system.replaceFile(
+                "System/Library/LaunchDaemons/com.vphone.bluetooth-bridge.plist",
+                fromFileAt: daemon,
+                mode: 0o644,
+                owner: Self.guestOwner,
+            )
+            bluetoothDaemon = daemon
+        } else {
+            try system.removeItem("usr/local/libexec/vphone-bluetooth-bridge")
+            try system.removeItem("System/Library/LaunchDaemons/com.vphone.bluetooth-bridge.plist")
+        }
         let launchd = "System/Library/xpc/launchd.plist"
         let backup = "\(launchd).bak"
         if try !system.exists(backup) {
@@ -2981,6 +3036,13 @@ struct VPhoneCustomFirmwareInstaller {
         let temp = work.file("launchd.plist")
         try system.copyFile(from: backup, to: "launchd.plist", in: work.directory)
         try CustomFirmwareDaemons.injectDaemon(into: temp, name: "vphoned", from: daemon)
+        if let bluetoothDaemon {
+            try CustomFirmwareDaemons.injectDaemon(
+                into: temp,
+                name: "com.vphone.bluetooth-bridge",
+                from: bluetoothDaemon,
+            )
+        }
         try system.replaceFile(launchd, fromFileAt: temp, mode: 0o644, owner: Self.guestOwner)
     }
 

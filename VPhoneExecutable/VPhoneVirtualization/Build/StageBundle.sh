@@ -144,6 +144,10 @@ guest_compatibility_library="$(/usr/bin/xcrun swift-stdlib-tool --print \
 /bin/cp "$guest_products/tvsetupfocus/libvphonetvsetupfocus.dylib" "$guest/libvphonetvsetupfocus.dylib"
 /bin/cp "$guest_products/homepodsetup/vphone-homepod-setup" "$guest/vphone-homepod-setup"
 /bin/cp "$guest_products/homepodsetup/com.vphone.homepod-setup.plist" "$guest/com.vphone.homepod-setup.plist"
+/bin/cp "$guest_products/bluetoothbridge/vphone-bluetooth-bridge" "$guest/vphone-bluetooth-bridge"
+/bin/cp "$guest_products/bluetoothbridge/com.vphone.bluetooth-bridge.plist" "$guest/com.vphone.bluetooth-bridge.plist"
+/bin/cp "$guest_products/bluetoothcontroller/libvphonebluetoothcontroller.dylib" \
+    "$guest/libvphonebluetoothcontroller.dylib"
 /bin/cp "$guest_products/gpu/libAppleParavirtCompilerPluginIOGPUFamily.dylib" \
     "$guest/libAppleParavirtCompilerPluginIOGPUFamily.dylib"
 # The HAL plugin is a bundle, signed whole by the Makefile; copied as a tree so

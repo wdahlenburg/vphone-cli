@@ -50,6 +50,7 @@ public enum FirmwareGuestSystemPatchSet {
 
     public static let locationdCohorting = "system-locationd-cfw-disable_auto_cohort"
     public static let virtualBluetooth = "system-bluetoothd-cfw-btvc_le_connection"
+    public static let bluetoothAdvertisementPassup = "system-bluetoothd-exp-btvc_advertisement_passup"
     public static let jetsamDisableAllowed = "system-jetsamproperties-cfw-disable_allowed"
     public static let tvTPRO = "system-dyld-exp-tv_tpro"
     public static let tvSetupDisplayLookup = "system-setupbackground-exp-pineboard_lookup"
@@ -180,6 +181,13 @@ public enum FirmwareGuestSystemPatchSet {
                 title: "Virtual Bluetooth",
                 summary: "Turns on the feature flag that lets bluetoothd establish LE connections between guests over its Bonjour virtual controller.",
                 target: .guestFile(path: "/" + CustomFirmwareBluetoothVirtualController.relativePath),
+                applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 26, minor: 0)),
+            ),
+            VPhonePatchDeclaration(
+                identifier: bluetoothAdvertisementPassup,
+                title: "Virtual Bluetooth app discovery",
+                summary: "Marks advertisements received from the virtual Bluetooth controller eligible for ordinary CoreBluetooth scan sessions.",
+                target: .guestExecutable(path: "/" + CustomFirmwareBluetoothAdvertisementPassup.relativePath),
                 applicability: VPhonePatchApplicability(iOSBase: .atLeast(major: 26, minor: 0)),
             ),
             VPhonePatchDeclaration(

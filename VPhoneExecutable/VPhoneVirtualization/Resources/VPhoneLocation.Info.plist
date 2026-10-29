@@ -23,5 +23,7 @@
 	<string>Shares your location with the virtual iPhone so apps running inside it see the same location.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Shares your location with the virtual iPhone so apps running inside it see the same location.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Shares nearby Bluetooth Low Energy devices with the virtual iPhone so apps running inside it can discover and connect to them.</string>
 </dict>
 </plist>

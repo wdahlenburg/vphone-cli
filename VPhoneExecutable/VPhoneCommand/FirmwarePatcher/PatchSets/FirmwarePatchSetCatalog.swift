@@ -70,7 +70,7 @@ public enum FirmwarePatchSetCatalog {
             .union(experimentalIdentityPatches)
             .union([FirmwareGuestSystemPatchSet.otaUserland, FirmwareGuestSystemPatchSet.homePodTopCap, FirmwareGuestSystemPatchSet.homePodSetupBypass, FirmwareGuestSystemPatchSet.homePodAirPlayVM, FirmwareGuestSystemPatchSet.homePodAudioProduct, FirmwareGuestSystemPatchSet.homePodWelcome, FirmwareGuestSystemPatchSet.homePodSiriSpeech, FirmwareGuestSystemPatchSet.homePodOTAUserland, FirmwareGuestSystemPatchSet.homePodSoundGlow, FirmwareGuestSystemPatchSet.homePodCryptexStaging, FirmwareGuestSystemPatchSet.homePodCryptexClass, FirmwareGuestSystemPatchSet.homePodAdHocInstall])
             .union([FirmwareKernelCustomFirmwarePatchSet.tvTPROPagers, misTrustAuthPatch, FirmwareGuestSystemPatchSet.settingsRootRows, FirmwareGuestSystemPatchSet.settingsSoftwareUpdate, FirmwareGuestSystemPatchSet.tvTPRO, FirmwareGuestSystemPatchSet.tvOTAUserland, FirmwareGuestSystemPatchSet.tvSetupDisplayLookup, FirmwareGuestSystemPatchSet.tvSetupFocus, FirmwareGuestSystemPatchSet.tvLocalActivation, FirmwareGuestSystemPatchSet.tvLegacySetup])
-            .union([FirmwareGuestSystemPatchSet.prebootFoldableProductId])
+            .union([FirmwareGuestSystemPatchSet.prebootFoldableProductId, FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup])
 
     /// ProMotion: the 120 Hz timing for the paravirtual display.
     ///
@@ -102,6 +102,7 @@ public enum FirmwarePatchSetCatalog {
     /// nothing declares. Include development bundles used on real VMs as well
     /// as releases: their records need the same migration.
     public static let renamedPatches: [String: String] = [
+        "system-bluetoothd-cfw-btvc_advertisement_passup": FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup,
         "kernel-exp-display_refresh_120hz": proMotionPatch,
         "kernel-exp-paravirt_gpu_task3": paravirtTask3Patch,
     ]
@@ -263,6 +264,7 @@ public enum FirmwarePatchSetCatalog {
         "system-backboardd-cfw-hinge",
         "system-springboard-cfw-fold_guard",
         "system-springboard-cfw-fold_display",
+        FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup,
         "system-campo-cfw-entitlements",
         "system-debugserver-cfw-install",
         FirmwareGuestSystemPatchSet.arm64eX1DyldBootstrap,

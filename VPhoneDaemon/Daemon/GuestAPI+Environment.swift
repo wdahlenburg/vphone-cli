@@ -28,12 +28,14 @@ extension GuestAPI {
         "libvphonegyro.dylib",
         "libvphoneaccelerometer.dylib",
         "libvphoneattitude.dylib",
+        "libvphonebluetoothcontroller.dylib",
     ]
     /// Must match `VPhoneGuestEnvironment.selectedLibraries`: the VM's patch selection owns these.
     static let environmentSelectedLibraries: Set = [
         "libprefsfix.dylib", "libsigninfix.dylib",
         "libvphonegyro.dylib", "libvphoneaccelerometer.dylib", "libvphoneattitude.dylib",
         "libvphonehinge.dylib", "libvphonefoldguard.dylib", "libvphonefolddisplay.dylib",
+        "libvphonebluetoothcontroller.dylib",
     ]
     static let environmentStaging = "/var/root/Library/Caches/vphone-environment"
 
@@ -107,6 +109,9 @@ extension GuestAPI {
         // whoever is looking at the screen.
         if names.contains("libmisfix.dylib") || names.contains("SystemHook-vphone.dylib") {
             restarted += GuestAPI.udidHookedDaemons.flatMap { stopProcesses(named: $0) }
+        }
+        if names.contains("libvphonebluetoothcontroller.dylib") || names.contains("SystemHook-vphone.dylib") {
+            restarted += stopProcesses(named: "bluetoothd")
         }
         return [
             "installed": names,

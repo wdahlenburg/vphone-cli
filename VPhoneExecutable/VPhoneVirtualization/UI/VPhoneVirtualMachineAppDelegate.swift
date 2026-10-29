@@ -20,6 +20,7 @@ class VPhoneVirtualMachineAppDelegate: NSObject, NSApplicationDelegate {
     private var hostAudioLatencySync: VPhoneHostAudioLatencySync?
     private var hostAutomationServer: VPhoneHostAutomationServer?
     private var cameraServer: VPhoneCameraServer?
+    private var bluetoothBridge: VPhoneBluetoothBridge?
     private var apiProxy: VPhoneAPIProxy?
     private var portForwarder: VPhonePortForwarder?
     private var sigintSource: DispatchSourceSignal?
@@ -138,6 +139,11 @@ class VPhoneVirtualMachineAppDelegate: NSObject, NSApplicationDelegate {
             if let device = vm.virtualMachine.socketDevices.first as? VZVirtioSocketDevice {
                 control.connect(device: device)
                 camServer.connect(device: device)
+                if ProcessInfo.processInfo.environment["VPHONE_BLUETOOTH"] == "1" {
+                    let bluetooth = VPhoneBluetoothBridge()
+                    bluetoothBridge = bluetooth
+                    bluetooth.connect(device: device)
+                }
                 if let listen = command.apiListen {
                     let hostScreen = VPhoneHostScreenService(
                         scale: options.screenScale,
@@ -544,6 +550,7 @@ class VPhoneVirtualMachineAppDelegate: NSObject, NSApplicationDelegate {
         clockSync?.stop()
         hostAudioLatencySync?.stop()
         cameraServer?.disconnect()
+        bluetoothBridge?.disconnect()
         menuController?.stopBatteryMonitoring()
         menuController?.guestPanelsWindowController.closeAttitudeDials()
         menuController?.tvRemoteWindowController.close()
@@ -563,6 +570,7 @@ class VPhoneVirtualMachineAppDelegate: NSObject, NSApplicationDelegate {
         clockSync = nil
         hostAudioLatencySync = nil
         cameraServer = nil
+        bluetoothBridge = nil
         hostAutomationServer = nil
         apiProxy = nil
         control = nil

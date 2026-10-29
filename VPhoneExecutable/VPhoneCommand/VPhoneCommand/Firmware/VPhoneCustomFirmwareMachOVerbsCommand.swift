@@ -301,6 +301,23 @@ struct VPhoneCustomFirmwarePatchWatchdogdCommand: ParsableCommand {
     }
 }
 
+// MARK: - patch-bluetoothd-btvc-passup
+
+struct VPhoneCustomFirmwarePatchBluetoothdBTVCCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "patch-bluetoothd-btvc-passup",
+        abstract: "Pass BTVC advertisements to CoreBluetooth scan sessions",
+    )
+
+    @Argument(help: "Path to the bluetoothd Mach-O, patched in place", transform: URL.init(fileURLWithPath:))
+    var binary: URL
+
+    func run() throws {
+        try requireUntruncatedMachO(at: binary)
+        try CustomFirmwareBluetoothAdvertisementPassup.patch(at: binary, log: machOVerbLog)
+    }
+}
+
 // MARK: - patch-diskimagesiod
 
 struct VPhoneCustomFirmwarePatchDiskimagesiodCommand: ParsableCommand {
@@ -654,6 +671,7 @@ enum VPhoneCustomFirmwareMachOVerbs {
             VPhoneCustomFirmwarePatchLaunchdJetsamCommand.self,
             VPhoneCustomFirmwarePatchArm64eX1Command.self,
             VPhoneCustomFirmwarePatchWatchdogdCommand.self,
+            VPhoneCustomFirmwarePatchBluetoothdBTVCCommand.self,
             VPhoneCustomFirmwarePatchDiskimagesiodCommand.self,
             VPhoneCustomFirmwarePatchVirtualAudioCommand.self,
             VPhoneCustomFirmwarePatchVirtualAudioMuteCommand.self,

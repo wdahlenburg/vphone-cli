@@ -129,8 +129,25 @@ static const char *vpDeviceNameFor(const char *path) {
     return vpIsDeviceNameTarget(path) && access(VP_DEVICE_NAME, R_OK) == 0 ? VP_DEVICE_NAME : NULL;
 }
 
+// The Bluetooth controller hook terminates the virtual controller's plaintext
+// HCI ACL boundary in bluetoothd. The guest bridge carries those packets to
+// the host, where CoreBluetooth performs the physical peripheral operations.
+#ifndef VP_BLUETOOTH_CONTROLLER
+#define VP_BLUETOOTH_CONTROLLER "/usr/lib/libvphonebluetoothcontroller.dylib"
+#endif
+
+static int vpIsBluetoothControllerTarget(const char *path) {
+    return path && vpPathHasSuffix(path, "/usr/sbin/bluetoothd");
+}
+
+static const char *vpBluetoothControllerFor(const char *path) {
+    return vpIsBluetoothControllerTarget(path) && access(VP_BLUETOOTH_CONTROLLER, R_OK) == 0
+               ? VP_BLUETOOTH_CONTROLLER
+               : NULL;
+}
+
 // The most libraries one process takes beside SystemHook.
-#define VP_INSERTED_LIBRARIES_MAX 4
+#define VP_INSERTED_LIBRARIES_MAX 5
 
 typedef struct {
     const char *paths[VP_INSERTED_LIBRARIES_MAX];
@@ -148,6 +165,7 @@ static VPInsertedLibraries vpInsertedLibrariesFor(const char *path) {
         vpBatteryHealthFixFor(path),
         vpDeviceHubFixFor(path),
         vpDeviceNameFor(path),
+        vpBluetoothControllerFor(path),
     };
     for (size_t index = 0; index < sizeof(candidates) / sizeof(candidates[0]); index++) {
         if (candidates[index] && result.count < VP_INSERTED_LIBRARIES_MAX)

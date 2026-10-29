@@ -125,6 +125,7 @@
 			<string>system-preferences-cfw-followup_groups</string>
 			<string>system-backboardd-cfw-gyroscope</string>
 			<string>system-backboardd-cfw-accelerometer</string>
+			<string>system-bluetoothd-exp-btvc_advertisement_passup</string>
 			<string>system-campo-cfw-entitlements</string>
 			<string>system-backboardd-cfw-hinge</string>
 			<string>system-springboard-cfw-fold_guard</string>

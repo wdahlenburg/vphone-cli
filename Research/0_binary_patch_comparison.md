@@ -4533,6 +4533,145 @@ kernelcache` staged as the user and linked as root) restores, boots, takes
 `cfw install` and answers vphoned as `AudioAccessory5,1`, iOS 26.5. Its plan
 holds `kernel-boot-vresearch101_kext_mix` beside `homepod-mini`'s kernel patches.
 
+## Physical Bluetooth Low Energy bridge (experimental, 2026-10-29)
+
+The iPhone/iPad runtime now pairs that feature flag with a persistent
+`vphone-bluetooth-bridge` launch daemon. `vphone-vm` scans with the Mac's
+CoreBluetooth central, serializes nearby BLE advertisements over VSOCK 1340,
+and the guest daemon republishes them through bluetoothd's `_btvc._tcp`
+transport as link-type-1 HCI extended advertising reports. The host converts
+CoreBluetooth's aggregate advertisement dictionary back into complete, typed
+legacy reports. When the aggregate does not fit in one 31-byte report, it emits
+an advertisement and scan-response pair with the same stable synthetic
+static-random address, allowing bluetoothd to merge the full local name with
+the service and manufacturer identity fields. It never truncates the inner
+manufacturer or service-data value.
+
+The VM drains the helper's stdout pipe eagerly and frames complete JSON lines
+before relaying them over VSOCK. This keeps a duplicate-enabled CoreBluetooth
+scan from filling the pipe and silently starving the guest of advertisements.
+
+Standard CoreBluetooth apps receive physical-device discovery without an
+app-specific shim after the new
+`system-bluetoothd-exp-btvc_advertisement_passup` patch. Apple's physical
+controller appends private scan metadata, while BTVC sends only the standard
+HCI report, including for Apple's own guest-to-guest advertisements. The
+virtual transport also reports that extended scanning, scan-source metadata
+and pass-up advertisements are unsupported even though it emits extended
+reports. That mismatch leaves bluetoothd counting HCI events without delivering
+them to third-party sessions. The opt-in patch (iOS 26 and later; binary-shape verified before writes) finds the unique semantic
+sequences that derive and store `scanSourceCore` and `isPassup`, the parsed-report
+delivery gate, the private AP-wakeup metadata derivation and its later
+wakeup-only route, plus the unique controller capability queries. It bypasses
+the two controller-only scan-source guards, forces all three capabilities on,
+sets both `scanSourceCore` and `isPassup` to one, redirects the delivery gate,
+synthesizes the metadata needed to allocate a UUID for a new address, and then
+routes that report through ordinary discovery instead of the AP-wakeup-only
+continuation. The later service, manufacturer-data, RSSI and duplicate filters
+are unchanged. Replacement instructions come from `ARM64Encoder` or the
+Keystone-checked `ARM64` constants. Modified code pages are re-attested, the
+installer re-signs the binary with its original identifier, and the pristine
+binary remains beside it as the normal reversible `.bak`.
+
+Advertisements expire after ten seconds so devices do not remain visible when
+the Mac stops receiving them. On 2026-10-27, a clean `bbphone2` boot from a
+coordinated disk/SEP snapshot connected the persistent VSOCK bridge; a probe
+installed through `installd`, with the normal iOS Bluetooth permission granted,
+reached `CBCentralManagerState.poweredOn` and received multiple named and unnamed
+physical-device `didDiscover` callbacks with UUIDs and RSSI values. This
+component originally covered discovery only. The physical connection data plane
+now terminates bluetoothd's plaintext BTVC HCI ACL boundary with
+`libvphonebluetoothcontroller.dylib`, inserted only into `/usr/sbin/bluetoothd`
+by the existing launchd/SystemHook spawn environment. The original BTVC send
+still runs for controller bookkeeping; the hook mirrors the pre-encryption ACL
+packet to the guest bridge and accepts controller-to-host ACL packets through
+BTVC's native receive path on the manager's own queue. Hopper analysis of
+`-[BTVCConnectionManager sendDataToPeer:dataLength:]` and
+`_btvcLinkReceivedData:packetBoundaryFlag:connection:` showed that the latter
+expects the L2CAP payload, packet-boundary flag and live `BTVCConnection`, not a
+complete four-byte-prefixed HCI ACL packet. The controller hook delivers the L2CAP payload and original HCI header through
+the manager's native `receiveDataPacketHandler` on its own queue. No guessed
+private connection ivars are inspected. Feeding a complete ACL packet to
+`BTVCHciManager._sendingHciData:` had left Dyson stalled immediately after the
+ATT MTU response.
+
+BTVC remains the sole owner of the guest connection-complete lifecycle. Its
+Bonjour link allocates transport handle `0x0401` and reports that handle to the
+iOS HCI stack before the Mac helper finishes the corresponding physical
+CoreBluetooth connection. The helper must therefore begin GATT discovery when
+the `CBPeripheral` connects without emitting another HCI connection-complete
+event. Emitting a second event for the helper's logical handle `0x0001` created
+a duplicate live link and terminated bluetoothd as it initialized GATT. The
+helper's logical handle is only correlation state for translated ATT and
+disconnect requests; it is not a second controller connection.
+
+The controller hook also observes the standard HCI Disconnect command while
+leaving BTVC's original handler in place. It forwards the logical connection
+handle to the Mac helper, which removes that GATT session and cancels the
+physical `CBPeripheral` connection when no guest session still owns it. Without
+that release, the Airwrap remained connected to the Mac after an iOS attempt;
+its next advertisement was consequently non-connectable and Dyson reported that
+another user was controlling the machine. A bridge PCAP of the failing path
+confirmed bidirectional ATT on logical handle `0x0001` (BTVC transport handle
+`0x0401`) before the missing disconnect was repaired.
+
+The bridge assigns a monotonically increasing generation to each replacement
+host, controller and BTVC WebSocket connection. File-descriptor numbers can be
+reused immediately after `close`; comparing only the descriptor allowed an old
+advertisement publisher or stale reader to mistake a replacement connection for
+its own. Generation checks now stop those publishers and prevent stale frames
+from reaching the current connection, including during bluetoothd reconnects.
+For protocol diagnosis, setting `VPHONE_BLUETOOTH_PCAP` to a writable path when
+launching a VM records the translated guest-to-device and device-to-guest ACL
+traffic as a DLT 201 Bluetooth HCI H4 PCAP. Capture is disabled by default and
+does not create or open a file during normal launches.
+The ACL hook does not modify shared-cache pages. The separately selectable
+scan pass-up patch does modify and re-sign the bluetoothd executable.
+
+The Mac helper maps the synthetic advertisement address back to its
+`CBPeripheral`, performs the physical CoreBluetooth connection and service,
+characteristic and descriptor discovery, assigns a deterministic virtual ATT
+handle table, and translates ATT MTU, service/characteristic/descriptor
+discovery, reads, writes and notification subscriptions. It returns ATT replies
+and physical notifications as HCI ACL packets over the reverse VSOCK path. BTVC
+sets bit 10 on the ACL transport handle (`1` becomes `0x401` in the observed
+traffic), so the bridge resolves that wire handle back to the logical connection
+and preserves the wire form on replies.
+macOS continues to own the built-in radio and its pairing; the guest continues
+to own its CoreBluetooth-facing HCI/ATT state. This is a GATT bridge, not raw
+assignment of the Mac's SoC Bluetooth controller, which Virtualization.framework
+and CoreBluetooth do not expose.
+
+The original iOS 26.6.2 `bbphone2` build discovered a physical Airwrap,
+completed pairing and application authentication, and transferred an update
+manifest and two image containers through the unmodified Dyson app. This is
+historical device evidence for the prototype, not validation of every guest
+version or the subsequent cleanup.
+
+The community branch keeps the scan patch and controller hook off in standard
+presets. The host additionally requires `VPHONE_BLUETOOTH=1`. Patch selection
+owns installation/removal of the controller library; environment hash sync cannot
+reinstall it after it is disabled. Newer guest versions use the same semantic
+patch-site checks and all-or-nothing Objective-C ABI admission; there is no
+iOS-26-only runtime branch. Unknown shapes fail before writing, and unknown hook
+signatures leave the native implementation intact.
+
+Cleanup removes the mock-profile runtime and duplicate connection-event path,
+derives ATT MTU from CoreBluetooth write capacity, expands 32-bit UUIDs, keeps
+mixed-width discovery responses contiguous, handles write-command backpressure,
+clears pending operations on physical disconnect, and protects capture files
+against overwrite. The BTVC WebSocket accepts only connections from this same
+guest, despite binding en0 for Apple's discovery path. This remains research
+guest plumbing, not a guest-app security boundary.
+
+Focused tests exercise advertisement splitting, malformed ACL framing (including
+a demonstrated red/green trailing-data case), UUID encoding, MTU limits,
+discovery ordering, capture-file framing and preservation, HCI disconnect
+parsing, injection targeting, and patch-version/preset selection. Real
+CoreBluetooth callback ordering, multi-device handle correlation and reconnect
+recovery remain integration gaps. See
+[Bluetooth setup and limits](../Documents/Guides/bluetooth.md).
+
 ## iOS 18 guests on the research board (2026-10-21)
 
 iOS 18.1 to 18.7.2 run on their own release's research board kernel, rebuilt

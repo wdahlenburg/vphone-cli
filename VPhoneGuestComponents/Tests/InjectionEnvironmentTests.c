@@ -7,6 +7,7 @@
 #define VP_BATTERY_HEALTH_FIX VP_TEST_LIBRARY_DIR "/libbatteryhealthfix.dylib"
 #define VP_DEVICEHUB_FIX VP_TEST_LIBRARY_DIR "/libdevicehubfix.dylib"
 #define VP_DEVICE_NAME VP_TEST_LIBRARY_DIR "/libdevicename.dylib"
+#define VP_BLUETOOTH_CONTROLLER VP_TEST_LIBRARY_DIR "/libvphonebluetoothcontroller.dylib"
 
 #include "../Shared/InjectionEnvironment.h"
 #include "../Shared/AttitudeProcess.h"
@@ -111,10 +112,21 @@ static void namesTheDeviceNameTargets(void) {
     assert(vpIsMISFixTarget("/usr/libexec/lockdownd"));
 }
 
+static void namesTheBluetoothControllerTarget(void) {
+    assert(vpIsBluetoothControllerTarget("/usr/sbin/bluetoothd"));
+    assert(vpIsBluetoothControllerTarget("/private/usr/sbin/bluetoothd"));
+    assert(!vpIsBluetoothControllerTarget("/usr/sbin/bluetoothd-helper"));
+    assert(!vpIsBluetoothControllerTarget("/usr/libexec/bluetoothd"));
+    assert(!vpIsBluetoothControllerTarget(NULL));
+}
+
 static void installLibraries(void) {
     if (mkdir(VP_TEST_LIBRARY_DIR, 0755) != 0)
         assert(errno == EEXIST);
-    const char *const paths[] = {VP_MIS_FIX, VP_BATTERY_HEALTH_FIX, VP_DEVICEHUB_FIX, VP_DEVICE_NAME};
+    const char *const paths[] = {
+        VP_MIS_FIX, VP_BATTERY_HEALTH_FIX, VP_DEVICEHUB_FIX, VP_DEVICE_NAME,
+        VP_BLUETOOTH_CONTROLLER,
+    };
     for (size_t index = 0; index < sizeof(paths) / sizeof(paths[0]); index++) {
         int fd = open(paths[index], O_WRONLY | O_CREAT | O_TRUNC, 0644);
         assert(fd >= 0);
@@ -142,6 +154,8 @@ static void selectsEveryLibraryOfATarget(void) {
     assert(settings.count == 1 && strcmp(settings.paths[0], VP_BATTERY_HEALTH_FIX) == 0);
     VPInsertedLibraries cryptexd = vpInsertedLibrariesFor("/usr/libexec/cryptexd");
     assert(cryptexd.count == 1 && strcmp(cryptexd.paths[0], VP_DEVICEHUB_FIX) == 0);
+    VPInsertedLibraries bluetoothd = vpInsertedLibrariesFor("/usr/sbin/bluetoothd");
+    assert(bluetoothd.count == 1 && strcmp(bluetoothd.paths[0], VP_BLUETOOTH_CONTROLLER) == 0);
     assert(vpInsertedLibrariesFor("/usr/libexec/xpcproxy").count == 0);
     assert(vpInsertedLibrariesFor(NULL).count == 0);
 
@@ -216,6 +230,7 @@ int main(void) {
     namesTheBatteryHealthFixTarget();
     namesTheDeviceHubFixTarget();
     namesTheDeviceNameTargets();
+    namesTheBluetoothControllerTarget();
     selectsEveryLibraryOfATarget();
     insertsSeveralLibraries();
     addsOnlyTheMissingLibrary();

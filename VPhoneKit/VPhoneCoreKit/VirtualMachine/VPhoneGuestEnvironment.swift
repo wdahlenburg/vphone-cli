@@ -24,6 +24,7 @@ public enum VPhoneGuestEnvironment {
         "libvphonegyro.dylib",
         "libvphoneaccelerometer.dylib",
         "libvphoneattitude.dylib",
+        "libvphonebluetoothcontroller.dylib",
     ]
 
     /// What an Apple TV takes: the launchd hook and SystemHook, which give
@@ -39,5 +40,6 @@ public enum VPhoneGuestEnvironment {
         "libprefsfix.dylib", "libsigninfix.dylib",
         "libvphonegyro.dylib", "libvphoneaccelerometer.dylib", "libvphoneattitude.dylib",
         "libvphonehinge.dylib", "libvphonefoldguard.dylib", "libvphonefolddisplay.dylib",
+        "libvphonebluetoothcontroller.dylib",
     ]
 }

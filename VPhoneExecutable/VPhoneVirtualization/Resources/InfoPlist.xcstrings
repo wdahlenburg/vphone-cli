@@ -1,6 +1,16 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "NSBluetoothAlwaysUsageDescription": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shares nearby Bluetooth Low Energy devices with the virtual iPhone so apps running inside it can discover and connect to them."
+          }
+        }
+      }
+    },
     "NSLocationUsageDescription": {
       "localizations": {
         "en": {
