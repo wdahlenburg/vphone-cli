@@ -5,6 +5,32 @@
 #include "VPhoneBluetoothHCICommand.h"
 
 int main(void) {
+    // Native completion supplies identity, including nonsequential/reused handles.
+    uint8_t complete[18] = {0, 0x27, 0x04, 0, 1, 0xC1, 2, 3, 4, 5, 0xC6};
+    VPBTLEConnection connection = {0};
+    assert(VPBTParseLEConnection(1, complete, sizeof(complete), &connection));
+    assert(connection.handle == 0x0427);
+    const uint8_t expectedAddress[] = {0xC1, 2, 3, 4, 5, 0xC6};
+    for (size_t i = 0; i < 6; i++) assert(connection.address[i] == expectedAddress[i]);
+    complete[1] = 9;
+    assert(VPBTParseLEConnection(1, complete, sizeof(complete), &connection));
+    assert(connection.handle == 0x0409);
+    complete[0] = 0x3e;
+    assert(!VPBTParseLEConnection(1, complete, sizeof(complete), &connection));
+    complete[0] = 0; complete[3] = 1;
+    assert(!VPBTParseLEConnection(1, complete, sizeof(complete), &connection));
+    complete[3] = 0;
+    assert(!VPBTParseLEConnection(1, complete, sizeof(complete) - 1, &connection));
+    assert(!VPBTParseLEConnection(0xff, complete, sizeof(complete), &connection));
+    uint8_t enhanced[30] = {0, 7, 0, 0, 1, 0xC1, 2, 3, 4, 5, 0xC6};
+    assert(VPBTParseLEConnection(0x0a, enhanced, sizeof(enhanced), &connection));
+    assert(connection.handle == 7);
+    uint16_t disconnectedHandle = 0;
+    const uint8_t disconnected[] = {0, 0x27, 4, 8};
+    assert(VPBTParseDisconnection(5, disconnected, 4, &disconnectedHandle));
+    assert(disconnectedHandle == 0x0427);
+    assert(!VPBTParseDisconnection(5, disconnected, 3, &disconnectedHandle));
+
     const uint8_t mtuResponse[] = {
         0x01, 0x24, 0x07, 0x00,
         0x03, 0x00, 0x04, 0x00, 0x03, 0xb9, 0x00,

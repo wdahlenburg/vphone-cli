@@ -351,7 +351,8 @@ static void VPBTHandleHost(int client) {
             if ([message[@"type"] isEqualToString:@"btvc_response"]) {
                 NSData *payload = [[NSData alloc] initWithBase64EncodedString:message[@"data"] ?: @"" options:0];
                 if (payload) VPBTSendWebSocketMessage(payload);
-            } else if ([message[@"type"] isEqualToString:@"hci_response"]) {
+            } else if ([message[@"type"] isEqualToString:@"hci_response"] ||
+                       [message[@"type"] isEqualToString:@"link_disconnected"]) {
                 VPBTSendControllerMessage(message);
             } else {
                 VPBTUpdateReport(message);
@@ -402,7 +403,7 @@ static void VPBTHandleController(int client) {
             NSDictionary *message = [NSJSONSerialization JSONObjectWithData:line options:0 error:NULL];
             if ([message isKindOfClass:NSDictionary.class] &&
                 ([message[@"type"] isEqualToString:@"hci"] ||
-                 [message[@"type"] isEqualToString:@"connect_request"] ||
+                 [message[@"type"] isEqualToString:@"connection_ready"] ||
                  [message[@"type"] isEqualToString:@"disconnect_request"])) {
                 VPBTSendHostMessage(message);
             }

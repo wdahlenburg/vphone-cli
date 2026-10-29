@@ -32,6 +32,7 @@ final class VPhoneBluetoothGATTSession {
     }
 
     let handle: UInt16
+    let identifier: String
     var transportHandle: UInt16?
     let address: Data
     let peripheral: CBPeripheral
@@ -52,9 +53,11 @@ final class VPhoneBluetoothGATTSession {
     var pendingWriteObject: ObjectIdentifier?
     var mtu = 23
     var writesWithoutResponse: [(CBCharacteristic, Data)] = []
+    var connectWhenDisconnected = false
 
-    init(handle: UInt16, address: Data, peripheral: CBPeripheral) {
+    init(handle: UInt16, identifier: String, address: Data, peripheral: CBPeripheral) {
         self.handle = handle
+        self.identifier = identifier
         self.address = address
         self.peripheral = peripheral
     }
@@ -73,7 +76,7 @@ extension VPhoneBluetoothHelperDelegate {
             for peripheral in peripherals { central?.cancelPeripheralConnection(peripheral) }
         case "btvc":
             handleBTVCMessage(message)
-        case "connect_request":
+        case "connection_ready":
             handleConnectRequest(message)
         case "disconnect_request":
             handleDisconnectRequest(message)
@@ -86,14 +89,27 @@ extension VPhoneBluetoothHelperDelegate {
 
     private func handleConnectRequest(_ message: [String: Any]) {
         guard let handleNumber = message["handle"] as? NSNumber,
+              let identifier = message["connection"] as? String, !identifier.isEmpty,
               let encodedAddress = message["address"] as? String,
               let address = Data(base64Encoded: encodedAddress), address.count == 6
         else { return }
         let handle = handleNumber.uint16Value
         guard handle != 0, handle <= 0x0EFF else { return }
-        guard let peripheral = peripheralsByAddress[address] else { return }
-        let session = VPhoneBluetoothGATTSession(handle: handle, address: address, peripheral: peripheral)
+        let candidates = [peripheralsByAddress[address], peripheralsByAddress[Data(address.reversed())]].compactMap { $0 }
+        guard Set(candidates.map(\.identifier)).count == 1, let peripheral = candidates.first else { return }
+        if let old = gattSessions[handle], old.identifier == identifier { return }
+        if let old = gattSessions.removeValue(forKey: handle), old.peripheral !== peripheral {
+            central?.cancelPeripheralConnection(old.peripheral)
+        }
+        let session = VPhoneBluetoothGATTSession(handle: handle, identifier: identifier, address: address, peripheral: peripheral)
         gattSessions[handle] = session
+        session.connectWhenDisconnected = peripheral.state == .disconnecting
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, let session = self.gattSessions[handle], session.identifier == identifier,
+                  !session.databaseReady else { return }
+            self.closeSessions(for: peripheral, message: "connection or GATT discovery timed out")
+            self.central?.cancelPeripheralConnection(peripheral)
+        }
         if peripheral.state == .connected {
             ensureDiscovery(session)
         } else {
@@ -104,10 +120,9 @@ extension VPhoneBluetoothHelperDelegate {
     private func handleDisconnectRequest(_ message: [String: Any]) {
         guard let handleNumber = message["handle"] as? NSNumber else { return }
         let handle = handleNumber.uint16Value
-        let sessionHandle = gattSessions[handle] == nil
-            ? VPhoneBluetoothATTTransport.logicalConnectionHandle(handle)
-            : handle
-        guard let session = gattSessions.removeValue(forKey: sessionHandle) else { return }
+        guard let session = gattSessions[handle],
+              session.identifier == message["connection"] as? String else { return }
+        gattSessions.removeValue(forKey: handle)
         let peripheral = session.peripheral
         guard sessions(for: peripheral).isEmpty, peripheral.state != .disconnected else { return }
         central?.cancelPeripheralConnection(peripheral)
@@ -211,22 +226,16 @@ extension VPhoneBluetoothHelperDelegate {
               let acl = VPhoneBluetoothATTTransport.parseACL(packet), acl.cid == 0x0004
         else { return }
         VPhoneBluetoothPacketCapture.shared.recordACL(packet, received: false)
-        let sessionHandle = gattSessions[acl.handle] == nil
-            ? VPhoneBluetoothATTTransport.logicalConnectionHandle(acl.handle)
-            : acl.handle
-        let address = (message["address"] as? String).flatMap { Data(base64Encoded: $0) }
-            ?? gattSessions[sessionHandle]?.address
-        guard let address, let peripheral = peripheralsByAddress[address] else {
+        guard let nativeHandle = message["handle"] as? NSNumber,
+              let session = gattSessions[nativeHandle.uint16Value],
+              session.identifier == message["connection"] as? String else { return }
+        let peripheral = session.peripheral
+        session.transportHandle = acl.handle
+        guard acl.payload.count <= 517, session.queuedATT.count < 128 else {
+            closeSessions(for: peripheral, message: "ATT input limit exceeded")
+            central?.cancelPeripheralConnection(peripheral)
             return
         }
-        let session: VPhoneBluetoothGATTSession
-        if let existing = gattSessions[sessionHandle], existing.peripheral.identifier == peripheral.identifier {
-            session = existing
-        } else {
-            session = VPhoneBluetoothGATTSession(handle: sessionHandle, address: address, peripheral: peripheral)
-            gattSessions[sessionHandle] = session
-        }
-        session.transportHandle = acl.handle
         guard peripheral.state == .connected else {
             session.queuedATT.append(acl.payload)
             connect(peripheral)
@@ -257,7 +266,7 @@ extension VPhoneBluetoothHelperDelegate {
         didFailToConnect peripheral: CBPeripheral,
         error: (any Error)?,
     ) {
-        failQueuedRequests(for: peripheral, message: error?.localizedDescription ?? "connection failed")
+        closeSessions(for: peripheral, message: error?.localizedDescription ?? "connection failed")
     }
 
     func centralManager(
@@ -265,7 +274,24 @@ extension VPhoneBluetoothHelperDelegate {
         didDisconnectPeripheral peripheral: CBPeripheral,
         error: (any Error)?,
     ) {
-        failQueuedRequests(for: peripheral, message: error?.localizedDescription ?? "disconnected")
+        let waiting = sessions(for: peripheral).filter(\.connectWhenDisconnected)
+        if !waiting.isEmpty {
+            for session in waiting { session.connectWhenDisconnected = false }
+            connect(peripheral)
+            return
+        }
+        closeSessions(for: peripheral, message: error?.localizedDescription ?? "disconnected")
+    }
+
+    private func closeSessions(for peripheral: CBPeripheral, message: String) {
+        failQueuedRequests(for: peripheral, message: message)
+        for session in sessions(for: peripheral) {
+            gattSessions.removeValue(forKey: session.handle)
+            emitControllerMessage([
+                "type": "link_disconnected", "handle": session.handle,
+                "connection": session.identifier,
+            ])
+        }
     }
 
     private func failQueuedRequests(for peripheral: CBPeripheral, message: String) {
@@ -481,6 +507,9 @@ extension VPhoneBluetoothHelperDelegate {
             }) else {
                 return sendError(request: 0x08, handle: start, code: 0x0A, session: session)
             }
+            guard !match.characteristic.isNotifying else {
+                return sendError(request: 0x08, handle: match.value, code: 0x06, session: session)
+            }
             session.pendingRead = .init(handle: match.value, response: .readByType)
             session.pendingReadObject = ObjectIdentifier(match.characteristic)
             session.peripheral.readValue(for: match.characteristic)
@@ -563,6 +592,9 @@ extension VPhoneBluetoothHelperDelegate {
             value.append(Self.attUUID(characteristic.uuid))
             sendReadValue(value, handle: handle, offset: offset, blob: isBlob, session: session)
         case let .characteristicValue(characteristic):
+            guard !characteristic.isNotifying else {
+                return sendError(request: request[0], handle: handle, code: 0x06, session: session)
+            }
             session.pendingRead = .init(
                 handle: handle,
                 response: .read(requestOpcode: request[0], offset: offset)
@@ -613,6 +645,11 @@ extension VPhoneBluetoothHelperDelegate {
                 session.peripheral.writeValue(value, for: characteristic, type: .withResponse)
             } else if characteristic.properties.contains(.writeWithoutResponse),
                       value.count <= session.peripheral.maximumWriteValueLength(for: .withoutResponse) {
+                guard session.writesWithoutResponse.count < 256 else {
+                    closeSessions(for: session.peripheral, message: "write backpressure limit exceeded")
+                    central?.cancelPeripheralConnection(session.peripheral)
+                    return
+                }
                 session.writesWithoutResponse.append((characteristic, value))
                 drainWrites(session)
             }
@@ -647,7 +684,7 @@ extension VPhoneBluetoothHelperDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: (any Error)?) {
-        for session in sessions(for: peripheral) {
+        for session in sessions(for: peripheral) where session.databaseReady && !session.connectWhenDisconnected {
             let object = ObjectIdentifier(characteristic)
             if session.pendingReadObject == object, let pending = session.pendingRead {
                 session.pendingRead = nil
@@ -746,8 +783,13 @@ extension VPhoneBluetoothHelperDelegate {
         VPhoneBluetoothPacketCapture.shared.recordACL(packet, received: true)
         let message: [String: Any] = [
             "type": "hci_response",
+            "connection": session.identifier,
             "data": packet.base64EncodedString(),
         ]
+        emitControllerMessage(message)
+    }
+
+    private func emitControllerMessage(_ message: [String: Any]) {
         guard var line = try? JSONSerialization.data(withJSONObject: message) else { return }
         line.append(0x0A)
         FileHandle.standardOutput.write(line)

@@ -15,4 +15,12 @@ typedef struct {
 bool VPBTParseACLPacket(const void *packet, size_t length, VPBTACLPacketView *view);
 bool VPBTDisconnectHandle(uint16_t opcode, const void *parameters, uint16_t length, uint16_t *handle);
 
+typedef struct {
+    uint16_t handle;
+    uint8_t address[6];
+} VPBTLEConnection;
+
+bool VPBTParseLEConnection(uint8_t subevent, const void *parameters, size_t length, VPBTLEConnection *connection);
+bool VPBTParseDisconnection(uint8_t event, const void *parameters, size_t length, uint16_t *handle);
+
 #endif

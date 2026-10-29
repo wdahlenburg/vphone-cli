@@ -25,11 +25,13 @@ static int VPBTSocket = -1;
 static uint64_t VPBTSocketGeneration;
 static id VPBTConnectionManager;
 static os_unfair_lock VPBTManagerLock = OS_UNFAIR_LOCK_INIT;
-static uint16_t VPBTNextConnectionHandle = 1;
+static NSMutableDictionary<NSNumber *, NSDictionary *> *VPBTLinks;
 
 typedef void (*VPBTHandleHciCommandIMP)(id, SEL, uint16_t, const void *, uint16_t);
 static VPBTHandleHciCommandIMP VPBTOriginalHandleHciCommand;
-static VPBTHandleHciCommandIMP VPBTOriginalHandleExtendedCreateConnection;
+typedef void (*VPBTHciEventIMP)(id, SEL, uint8_t, const void *, uint8_t);
+static VPBTHciEventIMP VPBTOriginalSendLEEvent;
+static VPBTHciEventIMP VPBTOriginalSendEvent;
 typedef unsigned char (*VPBTSendDataToPeerIMP)(id, SEL, const void *, uint16_t);
 static VPBTSendDataToPeerIMP VPBTOriginalSendDataToPeer;
 typedef void (^VPBTReceiveDataPacketHandler)(uint16_t, NSData *);
@@ -63,9 +65,23 @@ static void VPBTSendMessage(NSDictionary *message) {
     });
 }
 
-static void VPBTDeliverACL(NSData *packet) {
+static NSDictionary *VPBTLink(uint16_t handle) {
+    os_unfair_lock_lock(&VPBTManagerLock);
+    NSDictionary *link = VPBTLinks[@(handle)];
+    // BTVC tags its wire ACL handle with bit 10. Correlate against the
+    // observed completion, never against an independently allocated counter.
+    NSDictionary *tagged = VPBTLinks[@(handle & 0x03ff)];
+    if (link && tagged && link != tagged) link = nil;
+    else if (!link) link = tagged;
+    os_unfair_lock_unlock(&VPBTManagerLock);
+    return link;
+}
+
+static void VPBTDeliverACL(NSData *packet, NSString *identifier) {
     VPBTACLPacketView view = {0};
     if (!VPBTParseACLPacket(packet.bytes, packet.length, &view)) return;
+    NSDictionary *link = VPBTLink(view.connectionHandle);
+    if (![link[@"connection"] isEqual:identifier]) return;
     NSData *payload = [NSData dataWithBytes:view.payload length:view.payloadLength];
 
     os_unfair_lock_lock(&VPBTManagerLock);
@@ -89,7 +105,8 @@ static void VPBTDeliverACL(NSData *packet) {
     dispatch_queue_t queue = ((id (*)(id, SEL))objc_msgSend)(connectionManager, queueSelector);
     if (!queue) return;
     dispatch_async(queue, ^{
-        if (![connectionManager respondsToSelector:handlerSelector]) return;
+        if (![VPBTLink(view.connectionHandle)[@"connection"] isEqual:identifier]
+            || ![connectionManager respondsToSelector:handlerSelector]) return;
         VPBTReceiveDataPacketHandler handler =
             ((id (*)(id, SEL))objc_msgSend)(connectionManager, handlerSelector);
         if (handler) {
@@ -104,7 +121,29 @@ static void VPBTHandleLine(NSData *line) {
     if (![message isKindOfClass:NSDictionary.class]) return;
     if ([message[@"type"] isEqualToString:@"hci_response"]) {
         NSData *packet = [[NSData alloc] initWithBase64EncodedString:message[@"data"] ?: @"" options:0];
-        VPBTDeliverACL(packet);
+        VPBTDeliverACL(packet, message[@"connection"]);
+    } else if ([message[@"type"] isEqualToString:@"link_disconnected"]) {
+        uint16_t handle = [message[@"handle"] unsignedShortValue];
+        NSString *identifier = message[@"connection"];
+        if (![VPBTLink(handle)[@"connection"] isEqual:identifier]) return;
+        os_unfair_lock_lock(&VPBTManagerLock);
+        id manager = VPBTConnectionManager;
+        os_unfair_lock_unlock(&VPBTManagerLock);
+        if (!manager) {
+            Class cls = objc_getClass("BTVCConnectionManager");
+            SEL shared = sel_registerName("sharedConnectionManager");
+            if ([cls respondsToSelector:shared]) manager = ((id (*)(id, SEL))objc_msgSend)(cls, shared);
+        }
+        if (!manager) return;
+        dispatch_queue_t queue = ((id (*)(id, SEL))objc_msgSend)(manager, sel_registerName("dispatchQueue"));
+        dispatch_async(queue, ^{
+            if (![VPBTLink(handle)[@"connection"] isEqual:identifier]) return;
+            // Let native BTVC consume the disconnect, release the connection and
+            // deliver its own HCI event. No unsolicited HCI command is injected.
+            uint8_t parameters[] = {0, (uint8_t)handle, (uint8_t)(handle >> 8), 0x08};
+            ((VPBTHciEventIMP)objc_msgSend)(manager,
+                sel_registerName("_handleHciEvent:parameters:length:"), 0x05, parameters, sizeof(parameters));
+        });
     }
 }
 
@@ -172,9 +211,12 @@ static int VPBTConnect(void) {
 static void VPBTForwardACL(NSData *packet) {
     VPBTACLPacketView view = {0};
     if (!VPBTParseACLPacket(packet.bytes, packet.length, &view)) return;
+    NSDictionary *link = VPBTLink(view.connectionHandle);
+    if (!link) return;
     NSDictionary *message = @{
         @"type": @"hci",
-        @"handle": @(view.connectionHandle),
+        @"connection": link[@"connection"],
+        @"handle": link[@"handle"],
         @"data": [packet base64EncodedStringWithOptions:0],
     };
     VPBTSendMessage(message);
@@ -195,40 +237,35 @@ static unsigned char VPBTSendDataToPeer(id self, SEL command, const void *bytes,
     return result;
 }
 
-static NSData *VPBTConnectionTarget(id manager) {
-    @try {
-        id linkAgent = [manager valueForKey:@"linkAgent"];
-        NSDictionary *acceptList = [linkAgent valueForKey:@"filterAcceptList"];
-        for (id key in acceptList) {
-            if ([key isKindOfClass:NSData.class] && [key length] == 6) return key;
-        }
-    } @catch (__unused NSException *exception) {}
-    return nil;
+static void VPBTSendLEEvent(id self, SEL command, uint8_t subevent, const void *bytes, uint8_t length) {
+    VPBTLEConnection connection = {0};
+    if (VPBTParseLEConnection(subevent, bytes, length, &connection)) {
+        NSDictionary *link = @{
+            @"type": @"connection_ready", @"handle": @(connection.handle),
+            @"address": [[NSData dataWithBytes:connection.address length:6] base64EncodedStringWithOptions:0],
+            @"connection": NSUUID.UUID.UUIDString,
+        };
+        os_unfair_lock_lock(&VPBTManagerLock);
+        VPBTLinks[@(connection.handle)] = link;
+        os_unfair_lock_unlock(&VPBTManagerLock);
+        VPBTSendMessage(link);
+    }
+    VPBTOriginalSendLEEvent(self, command, subevent, bytes, length);
 }
 
-static void VPBTHandleExtendedCreateConnection(
-    id self, SEL command, uint16_t opcode, const void *bytes, uint16_t length
-) {
-    NSData *target = VPBTConnectionTarget(self);
-    if (!target || !bytes || length < 22) {
-        VPBTOriginalHandleExtendedCreateConnection(self, command, opcode, bytes, length);
-        return;
+static void VPBTSendEvent(id self, SEL command, uint8_t event, const void *bytes, uint8_t length) {
+    uint16_t handle = 0;
+    if (VPBTParseDisconnection(event, bytes, length, &handle)) {
+        NSDictionary *link = VPBTLink(handle);
+        os_unfair_lock_lock(&VPBTManagerLock);
+        if (link) [VPBTLinks removeObjectForKey:link[@"handle"]];
+        os_unfair_lock_unlock(&VPBTManagerLock);
+        if (link) VPBTSendMessage(@{
+            @"type": @"disconnect_request", @"handle": link[@"handle"],
+            @"connection": link[@"connection"],
+        });
     }
-    const uint8_t *parameters = bytes;
-    uint16_t interval = (uint16_t)parameters[14] | (uint16_t)parameters[15] << 8;
-    uint16_t latency = (uint16_t)parameters[18] | (uint16_t)parameters[19] << 8;
-    uint16_t timeout = (uint16_t)parameters[20] | (uint16_t)parameters[21] << 8;
-    os_unfair_lock_lock(&VPBTManagerLock);
-    uint16_t handle = VPBTNextConnectionHandle++;
-    if (VPBTNextConnectionHandle > 0x0eff) VPBTNextConnectionHandle = 1;
-    os_unfair_lock_unlock(&VPBTManagerLock);
-    VPBTOriginalHandleExtendedCreateConnection(self, command, opcode, bytes, length);
-    VPBTSendMessage(@{
-        @"type": @"connect_request",
-        @"handle": @(handle),
-        @"address": [target base64EncodedStringWithOptions:0],
-        @"interval": @(interval), @"latency": @(latency), @"timeout": @(timeout),
-    });
+    VPBTOriginalSendEvent(self, command, event, bytes, length);
 }
 
 static void VPBTHandleHciCommand(
@@ -236,7 +273,10 @@ static void VPBTHandleHciCommand(
 ) {
     uint16_t handle = 0;
     if (VPBTDisconnectHandle(opcode, bytes, length, &handle)) {
-        VPBTSendMessage(@{@"type": @"disconnect_request", @"handle": @(handle)});
+        NSDictionary *link = VPBTLink(handle);
+        if (link) VPBTSendMessage(@{
+            @"type": @"disconnect_request", @"handle": link[@"handle"], @"connection": link[@"connection"],
+        });
     }
     VPBTOriginalHandleHciCommand(self, command, opcode, bytes, length);
 }
@@ -247,25 +287,32 @@ static BOOL VPBTInstall(void) {
     Class connectionManager = objc_getClass("BTVCConnectionManager");
     if (!hciManager || !connectionManager) return NO;
     Method command = class_getInstanceMethod(hciManager, sel_registerName("handleHciCommand:params:length:"));
-    Method create = class_getInstanceMethod(hciManager,
-        sel_registerName("handleHciLeExtendedCreateConnectionCmd:params:length:"));
+    Method complete = class_getInstanceMethod(hciManager, sel_registerName("_sendLeMetaEvent:parameters:length:"));
+    Method event = class_getInstanceMethod(hciManager, sel_registerName("_sendHciEvent:parameters:length:"));
+    Method disconnect = class_getInstanceMethod(connectionManager, sel_registerName("_handleHciEvent:parameters:length:"));
     Method send = class_getInstanceMethod(connectionManager, sel_registerName("sendDataToPeer:dataLength:"));
     Method receive = class_getInstanceMethod(connectionManager, sel_registerName("receiveDataPacketHandler"));
     const char *commandTypes = command ? method_getTypeEncoding(command) : NULL;
-    const char *createTypes = create ? method_getTypeEncoding(create) : NULL;
+    const char *completeTypes = complete ? method_getTypeEncoding(complete) : NULL;
+    const char *eventTypes = event ? method_getTypeEncoding(event) : NULL;
+    const char *disconnectTypes = disconnect ? method_getTypeEncoding(disconnect) : NULL;
     const char *sendTypes = send ? method_getTypeEncoding(send) : NULL;
     // Check the entire supported ABI before changing any implementation.
     if (!commandTypes || strcmp(commandTypes, "v32@0:8S16*20S28") != 0
-        || !createTypes || strcmp(createTypes, "v32@0:8S16*20S28") != 0
+        || !completeTypes || strcmp(completeTypes, "v32@0:8C16*20C28") != 0
+        || !eventTypes || strcmp(eventTypes, "v32@0:8C16*20C28") != 0
+        || !disconnectTypes || strcmp(disconnectTypes, "v32@0:8C16*20C28") != 0
         || !sendTypes || strcmp(sendTypes, "C28@0:8*16S24") != 0 || !receive) {
         os_log_error(OS_LOG_DEFAULT, "VPBluetoothController unsupported BTVC runtime; hooks disabled");
         return YES;
     }
     VPBTOriginalHandleHciCommand = (VPBTHandleHciCommandIMP)method_getImplementation(command);
-    VPBTOriginalHandleExtendedCreateConnection = (VPBTHandleHciCommandIMP)method_getImplementation(create);
+    VPBTOriginalSendLEEvent = (VPBTHciEventIMP)method_getImplementation(complete);
+    VPBTOriginalSendEvent = (VPBTHciEventIMP)method_getImplementation(event);
     VPBTOriginalSendDataToPeer = (VPBTSendDataToPeerIMP)method_getImplementation(send);
     method_setImplementation(command, (IMP)VPBTHandleHciCommand);
-    method_setImplementation(create, (IMP)VPBTHandleExtendedCreateConnection);
+    method_setImplementation(complete, (IMP)VPBTSendLEEvent);
+    method_setImplementation(event, (IMP)VPBTSendEvent);
     method_setImplementation(send, (IMP)VPBTSendDataToPeer);
     os_log(OS_LOG_DEFAULT, "VPBluetoothController plaintext HCI bridge installed");
     return YES;
@@ -284,6 +331,7 @@ static void VPBTInstallWhenReady(NSUInteger attempt) {
 
 __attribute__((constructor)) static void VPBTInitialize(void) {
     VPBTQueue = dispatch_queue_create("com.vphone.bluetooth-controller", DISPATCH_QUEUE_SERIAL);
+    VPBTLinks = [NSMutableDictionary dictionary];
     VPBTInstallWhenReady(0);
 }
 

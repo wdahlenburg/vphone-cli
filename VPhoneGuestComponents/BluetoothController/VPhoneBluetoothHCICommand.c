@@ -1,4 +1,25 @@
 #include "VPhoneBluetoothHCICommand.h"
+#include <string.h>
+
+bool VPBTParseLEConnection(uint8_t subevent, const void *parameters, size_t length, VPBTLEConnection *connection) {
+    size_t required = subevent == 0x01 ? 18 : (subevent == 0x0a ? 30 : 0);
+    if (!required || length != required || !parameters || !connection) return false;
+    const uint8_t *bytes = parameters;
+    uint16_t handle = (uint16_t)bytes[1] | (uint16_t)bytes[2] << 8;
+    if (bytes[0] != 0 || bytes[3] != 0 || handle == 0 || handle > 0x0eff) return false;
+    connection->handle = handle;
+    memcpy(connection->address, bytes + 5, 6);
+    return true;
+}
+
+bool VPBTParseDisconnection(uint8_t event, const void *parameters, size_t length, uint16_t *handle) {
+    if (event != 0x05 || length != 4 || !parameters || !handle) return false;
+    const uint8_t *bytes = parameters;
+    uint16_t value = (uint16_t)bytes[1] | (uint16_t)bytes[2] << 8;
+    if (bytes[0] != 0 || value == 0 || value > 0x0eff) return false;
+    *handle = value;
+    return true;
+}
 
 bool VPBTParseACLPacket(const void *packet, size_t length, VPBTACLPacketView *view) {
     if (!packet || length < 4 || !view) return false;

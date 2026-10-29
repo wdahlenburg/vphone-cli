@@ -231,6 +231,11 @@ test-bluetooth-controller:
 		-o $(OUT)/BluetoothControllerTests \
 		Tests/BluetoothControllerTests.c BluetoothController/VPhoneBluetoothHCICommand.c
 	@$(OUT)/BluetoothControllerTests
+	xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Werror \
+		-o $(OUT)/BluetoothControllerRuntimeTests \
+		Tests/BluetoothControllerRuntimeTests.m BluetoothController/libvphonebluetoothcontroller.m \
+		BluetoothController/VPhoneBluetoothHCICommand.c -framework Foundation
+	@$(OUT)/BluetoothControllerRuntimeTests
 
 test-x1-lowering:
 	@mkdir -p $(OUT)
@@ -491,13 +496,13 @@ $(HOMEPODSETUP): $(HOMEPODSETUP_SOURCES) $(HOMEPODSETUP_INPUTS)
 
 $(BLUETOOTHBRIDGE): $(BLUETOOTHBRIDGE_SOURCES) $(BLUETOOTHBRIDGE_INPUTS)
 	@mkdir -p $(STAGE)/bluetoothbridge
-	$(CLANG) $(COMMON_FLAGS) -Wall -Wextra -Werror -o $@ $(BLUETOOTHBRIDGE_SOURCES) -framework Foundation
+	$(CLANG) $(filter-out -miphoneos-version-min=%,$(COMMON_FLAGS)) -miphoneos-version-min=18.0 -Wall -Wextra -Werror -o $@ $(BLUETOOTHBRIDGE_SOURCES) -framework Foundation
 	@cp BluetoothBridge/com.vphone.bluetooth-bridge.plist $(STAGE)/bluetoothbridge/
 	@codesign --force --sign - $@
 
 $(BLUETOOTHCONTROLLER): $(BLUETOOTHCONTROLLER_SOURCES) $(BLUETOOTHCONTROLLER_INPUTS)
 	@mkdir -p $(STAGE)/bluetoothcontroller
-	$(CLANG) $(COMMON_FLAGS) -Wall -Wextra -Werror -dynamiclib \
+	$(CLANG) $(filter-out -miphoneos-version-min=%,$(COMMON_FLAGS)) -miphoneos-version-min=18.0 -Wall -Wextra -Werror -dynamiclib \
 		-install_name /usr/lib/libvphonebluetoothcontroller.dylib \
 		-o $@ $(BLUETOOTHCONTROLLER_SOURCES) -framework Foundation \
 		-Wl,-not_for_dyld_shared_cache
