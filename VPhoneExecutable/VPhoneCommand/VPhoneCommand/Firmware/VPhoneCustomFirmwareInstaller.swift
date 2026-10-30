@@ -1507,14 +1507,41 @@ struct VPhoneCustomFirmwareInstaller {
             if applied { live.insert(identifier) }
         }
 
-        // 1. The redeploy first, so no later patch failure can block it. vphoned
-        //    and the environment are boot-essential (always on). The environment
-        //    keeps its old narrow rule under `environmentOnly`.
+        let bluetoothPassupID = FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup
+        if FirmwareGuestSystemPatchSet.manifest.patches.first(where: {
+            $0.identifier == bluetoothPassupID
+        })?.applicability.matches(iOSBase: VPhoneVersion(version), cloudOS: nil) == true {
+            machO(
+                bluetoothPassupID,
+                path: CustomFirmwareBluetoothAdvertisementPassup.relativePath,
+                verbs: ["patch-bluetoothd-btvc-passup"],
+            )
+        } else if priorGuest.contains(bluetoothPassupID) {
+            // Keep the receipt honest outside the declared applicability
+            // if an existing machine changes its restored userland underneath it.
+            live.insert(bluetoothPassupID)
+        }
+
+        isolate([bluetoothPassupID]) {
+            let path = "usr/lib/libvphonebluetoothcontroller.dylib"
+            if live.contains(bluetoothPassupID) {
+                try system.replaceFile(
+                    path, fromFileAt: VPhoneGuestBinaries.resolve("libvphonebluetoothcontroller.dylib"),
+                    mode: 0o755, owner: Self.guestOwner
+                )
+            } else {
+                try system.removeItem(path)
+            }
+        }
+
+        // Redeploy after Bluetooth resolution so daemon selection follows the live
+        // patch. vphoned and the environment are boot-essential (always on).
+        // The environment keeps its old narrow rule under `environmentOnly`.
         isolate(["system-vphoned-boot-install"]) {
             if on("system-vphoned-boot-install") {
                 try installVphoned(
                     guestDevice: guestDevice, system: system, work: work,
-                    bluetoothEnabled: plan?.isEnabled(FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup) == true
+                    bluetoothEnabled: live.contains(FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup)
                 )
                 live.insert("system-vphoned-boot-install")
             }
@@ -1732,33 +1759,6 @@ struct VPhoneCustomFirmwareInstaller {
             } else if priorGuest.contains(bluetoothID) {
                 print("  [!] \(bluetoothID): no backup to revert (not revertible)")
                 live.insert(bluetoothID)
-            }
-        }
-
-        let bluetoothPassupID = FirmwareGuestSystemPatchSet.bluetoothAdvertisementPassup
-        if FirmwareGuestSystemPatchSet.manifest.patches.first(where: {
-            $0.identifier == bluetoothPassupID
-        })?.applicability.matches(iOSBase: VPhoneVersion(version), cloudOS: nil) == true {
-            machO(
-                bluetoothPassupID,
-                path: CustomFirmwareBluetoothAdvertisementPassup.relativePath,
-                verbs: ["patch-bluetoothd-btvc-passup"],
-            )
-        } else if priorGuest.contains(bluetoothPassupID) {
-            // Keep the receipt honest outside the declared applicability
-            // if an existing machine changes its restored userland underneath it.
-            live.insert(bluetoothPassupID)
-        }
-
-        isolate([bluetoothPassupID]) {
-            let path = "usr/lib/libvphonebluetoothcontroller.dylib"
-            if live.contains(bluetoothPassupID) {
-                try system.replaceFile(
-                    path, fromFileAt: VPhoneGuestBinaries.resolve("libvphonebluetoothcontroller.dylib"),
-                    mode: 0o755, owner: Self.guestOwner
-                )
-            } else {
-                try system.removeItem(path)
             }
         }
 

@@ -8,6 +8,8 @@ import Virtualization
 final class VPhoneBluetoothBridge {
     nonisolated static let vsockPort: UInt32 = 1340
 
+    private let writerQueue = DispatchQueue(label: "com.vphone.bluetooth.writer")
+    private var pendingWrites = 0
     private var device: VZVirtioSocketDevice?
     private var connection: VZVirtioSocketConnection?
     private var connectionFD: Int32 = -1
@@ -37,6 +39,7 @@ final class VPhoneBluetoothBridge {
         helperInput = nil
         helper?.terminate()
         helper = nil
+        if connectionFD >= 0 { Darwin.shutdown(connectionFD, SHUT_RDWR) }
         connectionFD = -1
         connection = nil
         device = nil
@@ -72,6 +75,11 @@ final class VPhoneBluetoothBridge {
             }
         }
         do {
+            let writer = input.fileHandleForWriting.fileDescriptor
+            guard fcntl(writer, F_SETFL, fcntl(writer, F_GETFL) | O_NONBLOCK) == 0,
+                  fcntl(writer, F_SETNOSIGPIPE, 1) == 0 else {
+                throw POSIXError(.EIO)
+            }
             try process.run()
             helper = process
             helperInput = input
@@ -114,7 +122,20 @@ final class VPhoneBluetoothBridge {
         guard connectionFD >= 0 else { return }
         var data = Data(line.utf8)
         data.append(0x0A)
-        if !Self.send(fd: connectionFD, data: data) { handleDisconnect() }
+        guard pendingWrites < 128 else { handleDisconnect(); return }
+        let fd = Darwin.dup(connectionFD)
+        guard fd >= 0 else { handleDisconnect(); return }
+        let token = connectionToken
+        pendingWrites += 1
+        writerQueue.async { [weak self, data] in
+            let success = Self.send(fd: fd, data: data)
+            Darwin.close(fd)
+            Task { @MainActor in
+                guard let self else { return }
+                self.pendingWrites -= 1
+                if !success, self.connectionToken == token { self.handleDisconnect() }
+            }
+        }
     }
 
     private func attemptConnect() {
@@ -126,6 +147,13 @@ final class VPhoneBluetoothBridge {
                 guard let self, self.connectionToken == token else { return }
                 switch result {
                 case let .success(connection):
+                    // Bound a stalled writer; all writes run off the main actor.
+                    var timeout = timeval(tv_sec: 1, tv_usec: 0)
+                    guard setsockopt(connection.fileDescriptor, SOL_SOCKET, SO_SNDTIMEO,
+                                     &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+                        self.attemptConnect()
+                        return
+                    }
                     self.connection = connection
                     self.connectionFD = connection.fileDescriptor
                     self.startGuestReader(fd: connection.fileDescriptor, token: token)
@@ -147,6 +175,7 @@ final class VPhoneBluetoothBridge {
         try? guestInput?.close()
         guestInput = nil
         sendToHelper(line: "{\"type\":\"reset\"}")
+        if connectionFD >= 0 { Darwin.shutdown(connectionFD, SHUT_RDWR) }
         connectionFD = -1
         connection = nil
         attemptConnect()
@@ -182,21 +211,26 @@ final class VPhoneBluetoothBridge {
         guard let handle = helperInput?.fileHandleForWriting else { return }
         var data = Data(line.utf8)
         data.append(0x0A)
-        do {
-            try handle.write(contentsOf: data)
-        } catch {
-            print("[bluetooth] cannot forward guest controller data to host helper: \(error.localizedDescription)")
+        // A stalled helper must never block the VM main thread. Retire it if
+        // a complete frame cannot be written; continuing would corrupt framing.
+        let written = data.withUnsafeBytes {
+            Darwin.write(handle.fileDescriptor, $0.baseAddress, $0.count)
+        }
+        if written != data.count {
+            helper?.terminate()
+            try? handle.close()
+            helperInput = nil
         }
     }
 
-    private nonisolated static func send(fd: Int32, data: Data) -> Bool {
+    nonisolated static func send(fd: Int32, data: Data) -> Bool {
         data.withUnsafeBytes { bytes in
             guard var cursor = bytes.baseAddress else { return false }
             var remaining = bytes.count
             while remaining > 0 {
-                let count = Darwin.send(fd, cursor, remaining, MSG_NOSIGNAL)
+                let count = Darwin.send(fd, cursor, remaining, MSG_NOSIGNAL | MSG_DONTWAIT)
                 if count < 0 && errno == EINTR { continue }
-                if count <= 0 { return false }
+                if count <= 0 || count < remaining { return false }
                 remaining -= count
                 cursor = cursor.advanced(by: count)
             }

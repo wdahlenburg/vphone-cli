@@ -33,6 +33,47 @@ struct BluetoothATTTransportTests {
         continuation[1] = 0x10
         precondition(VPhoneBluetoothATTTransport.parseACL(continuation) == nil)
 
+        var assembler = VPhoneBluetoothACLReassembler()
+        // A real ATT write spanning two HCI packets. Only its first fragment
+        // carries the L2CAP header; the response must contain the entire value.
+        let first = Data([0x42, 0x20, 6, 0, 5, 0, 4, 0, 0x12, 1])
+        let last = Data([0x42, 0x10, 3, 0, 0, 0xAA, 0xBB])
+        precondition(assembler.consume(first) == nil)
+        precondition(assembler.consume(last)?.payload == Data([0x12, 1, 0, 0xAA, 0xBB]))
+        precondition(assembler.consume(last) == nil)
+        precondition(assembler.consume(first) == nil)
+        var otherHandle = last
+        otherHandle[0] = 0x43
+        precondition(assembler.consume(otherHandle) == nil)
+        precondition(assembler.consume(last) == nil)
+        precondition(assembler.consume(first) == nil)
+        precondition(assembler.consume(packet)?.payload == mtuRequest)
+        precondition(assembler.consume(last) == nil)
+        var oversized = first
+        oversized[4] = 0xFF; oversized[5] = 0xFF
+        precondition(assembler.consume(oversized) == nil)
+        precondition(assembler.consume(last) == nil)
+        precondition(assembler.consume(first) == nil)
+        var overrun = last + Data([0xCC])
+        overrun[2] = 4
+        precondition(assembler.consume(overrun) == nil)
+        precondition(assembler.consume(last) == nil)
+
+        let largeWrite = Data([0x12, 1, 0]) + Data(repeating: 0xA5, count: 514)
+        let largePacket = VPhoneBluetoothATTTransport.makeACL(handle: 0x42, cid: 4, payload: largeWrite)
+        var startFragment = Data([0x42, 0x20, 27, 0])
+        startFragment.append(largePacket[4..<31])
+        let tail = Data(largePacket.dropFirst(31))
+        var tailFragment = Data([0x42, 0x10])
+        VPhoneBluetoothATTTransport.append16(UInt16(tail.count), to: &tailFragment)
+        tailFragment.append(tail)
+        precondition(assembler.consume(startFragment) == nil)
+        precondition(assembler.consume(tailFragment)?.payload == largeWrite)
+        // Replacing the connection drops its pending fragment state.
+        precondition(assembler.consume(startFragment) == nil)
+        assembler = VPhoneBluetoothACLReassembler()
+        precondition(assembler.consume(tailFragment) == nil)
+
         let maximumPayload = Data(repeating: 0xAB, count: 185)
         let maximumPacket = VPhoneBluetoothATTTransport.makeACL(
             handle: 0x0FFF, cid: 0x0004, payload: maximumPayload,

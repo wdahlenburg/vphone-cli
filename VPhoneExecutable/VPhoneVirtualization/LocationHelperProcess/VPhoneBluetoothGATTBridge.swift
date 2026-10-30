@@ -34,6 +34,7 @@ final class VPhoneBluetoothGATTSession {
     let handle: UInt16
     let identifier: String
     var transportHandle: UInt16?
+    var aclReassembler = VPhoneBluetoothACLReassembler()
     let address: Data
     let peripheral: CBPeripheral
     var queuedATT: [Data] = []
@@ -51,6 +52,10 @@ final class VPhoneBluetoothGATTSession {
     var pendingReadObject: ObjectIdentifier?
     var pendingWriteHandle: UInt16?
     var pendingWriteObject: ObjectIdentifier?
+    var subscriptions: [ObjectIdentifier: UInt16] = [:]
+    var pendingSubscriptions: [ObjectIdentifier: UInt16] = [:]
+    var indicationPending = false
+    var indications: [Data] = []
     var mtu = 23
     var writesWithoutResponse: [(CBCharacteristic, Data)] = []
     var connectWhenDisconnected = false
@@ -222,14 +227,14 @@ extension VPhoneBluetoothHelperDelegate {
 
     private func handleHCIPacket(_ message: [String: Any]) {
         guard let encoded = message["data"] as? String,
-              let packet = Data(base64Encoded: encoded),
-              let acl = VPhoneBluetoothATTTransport.parseACL(packet), acl.cid == 0x0004
+              let packet = Data(base64Encoded: encoded)
         else { return }
         VPhoneBluetoothPacketCapture.shared.recordACL(packet, received: false)
         guard let nativeHandle = message["handle"] as? NSNumber,
               let session = gattSessions[nativeHandle.uint16Value],
               session.identifier == message["connection"] as? String else { return }
         let peripheral = session.peripheral
+        guard let acl = session.aclReassembler.consume(packet) else { return }
         session.transportHandle = acl.handle
         guard acl.payload.count <= 517, session.queuedATT.count < 128 else {
             closeSessions(for: peripheral, message: "ATT input limit exceeded")
@@ -336,7 +341,8 @@ extension VPhoneBluetoothHelperDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: (any Error)?) {
         guard error == nil else {
-            failQueuedRequests(for: peripheral, message: error!.localizedDescription)
+            closeSessions(for: peripheral, message: error!.localizedDescription)
+            central?.cancelPeripheralConnection(peripheral)
             return
         }
         let services = peripheral.services ?? []
@@ -353,7 +359,8 @@ extension VPhoneBluetoothHelperDelegate {
         error: (any Error)?,
     ) {
         if let error {
-            failQueuedRequests(for: peripheral, message: error.localizedDescription)
+            closeSessions(for: peripheral, message: error.localizedDescription)
+            central?.cancelPeripheralConnection(peripheral)
             return
         }
         let characteristics = service.characteristics ?? []
@@ -371,7 +378,8 @@ extension VPhoneBluetoothHelperDelegate {
         error: (any Error)?,
     ) {
         if let error {
-            failQueuedRequests(for: peripheral, message: error.localizedDescription)
+            closeSessions(for: peripheral, message: error.localizedDescription)
+            central?.cancelPeripheralConnection(peripheral)
             return
         }
         for session in sessions(for: peripheral) {
@@ -465,7 +473,12 @@ extension VPhoneBluetoothHelperDelegate {
         case 0x12, 0x52:
             write(request, session: session)
         case 0x1E:
-            break
+            guard request.count == 1, session.indicationPending else { return }
+            session.indicationPending = false
+            if !session.indications.isEmpty {
+                session.indicationPending = true
+                sendATT(session.indications.removeFirst(), session: session)
+            }
         default:
             sendError(request: opcode, handle: 0, code: 0x06, session: session)
         }
@@ -602,6 +615,14 @@ extension VPhoneBluetoothHelperDelegate {
             session.pendingReadObject = ObjectIdentifier(characteristic)
             session.peripheral.readValue(for: characteristic)
         case let .descriptor(descriptor):
+            if descriptor.uuid == CBUUID(string: "2902"), let characteristic = descriptor.characteristic {
+                var value = Data()
+                VPhoneBluetoothATTTransport.append16(
+                    session.subscriptions[ObjectIdentifier(characteristic), default: 0], to: &value
+                )
+                sendReadValue(value, handle: handle, offset: offset, blob: isBlob, session: session)
+                return
+            }
             session.pendingRead = .init(
                 handle: handle,
                 response: .read(requestOpcode: request[0], offset: offset)
@@ -667,6 +688,7 @@ extension VPhoneBluetoothHelperDelegate {
                     if wantsResponse { sendError(request: opcode, handle: handle, code: 0x13, session: session) }
                     return
                 }
+                session.pendingSubscriptions[ObjectIdentifier(characteristic)] = configuration
                 let enabled = configuration != 0
                 if wantsResponse {
                     session.pendingWriteHandle = handle
@@ -708,10 +730,23 @@ extension VPhoneBluetoothHelperDelegate {
                 }
             } else if error == nil, characteristic.isNotifying,
                       let handle = session.characteristicValueHandles[object], let value = characteristic.value {
-                var notification = Data([characteristic.properties.contains(.indicate) ? 0x1D : 0x1B])
+                let configuration = session.subscriptions[object, default: 0]
+                guard configuration != 0 else { continue }
+                let indication = configuration & 1 == 0
+                var notification = Data([indication ? 0x1D : 0x1B])
                 VPhoneBluetoothATTTransport.append16(handle, to: &notification)
                 notification.append(value.prefix(max(0, session.mtu - 3)))
-                sendATT(notification, session: session)
+                if indication && session.indicationPending {
+                    guard session.indications.count < 128 else {
+                        closeSessions(for: peripheral, message: "indication backpressure limit exceeded")
+                        central?.cancelPeripheralConnection(peripheral)
+                        return
+                    }
+                    session.indications.append(notification)
+                } else {
+                    if indication { session.indicationPending = true }
+                    sendATT(notification, session: session)
+                }
             }
         }
     }
@@ -740,6 +775,12 @@ extension VPhoneBluetoothHelperDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: (any Error)?) {
+        let object = ObjectIdentifier(characteristic)
+        for session in sessions(for: peripheral) {
+            if let configuration = session.pendingSubscriptions.removeValue(forKey: object), error == nil {
+                session.subscriptions[object] = configuration
+            }
+        }
         finishWrite(object: ObjectIdentifier(characteristic), peripheral: peripheral, error: error)
     }
 

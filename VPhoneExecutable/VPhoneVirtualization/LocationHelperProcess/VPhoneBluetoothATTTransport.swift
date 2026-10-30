@@ -137,3 +137,44 @@ enum VPhoneBluetoothATTTransport {
         data.append(UInt8(truncatingIfNeeded: value >> 8))
     }
 }
+
+/// One incomplete ATT PDU per native connection lifetime. Disconnecting drops
+/// this value with the session, so continuations cannot cross handle reuse.
+struct VPhoneBluetoothACLReassembler {
+    private var pending = Data()
+    private var handle: UInt16?
+    private var expected = 0
+
+    mutating func consume(_ packet: Data) -> (handle: UInt16, cid: UInt16, payload: Data)? {
+        guard packet.count >= 4 else { reset(); return nil }
+        let header = VPhoneBluetoothATTTransport.load16(packet, 0)
+        let length = Int(VPhoneBluetoothATTTransport.load16(packet, 2))
+        let boundary = (header >> 12) & 3
+        let incomingHandle = header & 0x0fff
+        guard length == packet.count - 4, length > 0 else { reset(); return nil }
+        let fragment = packet.dropFirst(4)
+        if boundary == 0 || boundary == 2 {
+            reset()
+            guard fragment.count >= 4 else { return nil }
+            expected = Int(VPhoneBluetoothATTTransport.load16(Data(fragment), 0)) + 4
+            guard expected <= 521, expected >= 5,
+                  VPhoneBluetoothATTTransport.load16(Data(fragment), 2) == 4 else { reset(); return nil }
+            handle = incomingHandle
+        } else if boundary != 1 || handle != incomingHandle || pending.isEmpty {
+            reset()
+            return nil
+        }
+        guard pending.count + fragment.count <= expected else { reset(); return nil }
+        pending.append(contentsOf: fragment)
+        guard pending.count == expected else { return nil }
+        let payload = Data(pending.dropFirst(4))
+        reset()
+        return (incomingHandle, 4, payload)
+    }
+
+    private mutating func reset() {
+        pending.removeAll(keepingCapacity: false)
+        handle = nil
+        expected = 0
+    }
+}

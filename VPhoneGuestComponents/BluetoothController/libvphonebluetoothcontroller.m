@@ -292,17 +292,24 @@ static BOOL VPBTInstall(void) {
     Method disconnect = class_getInstanceMethod(connectionManager, sel_registerName("_handleHciEvent:parameters:length:"));
     Method send = class_getInstanceMethod(connectionManager, sel_registerName("sendDataToPeer:dataLength:"));
     Method receive = class_getInstanceMethod(connectionManager, sel_registerName("receiveDataPacketHandler"));
+    Method queue = class_getInstanceMethod(connectionManager, sel_registerName("dispatchQueue"));
+    Method shared = class_getClassMethod(connectionManager, sel_registerName("sharedConnectionManager"));
     const char *commandTypes = command ? method_getTypeEncoding(command) : NULL;
     const char *completeTypes = complete ? method_getTypeEncoding(complete) : NULL;
     const char *eventTypes = event ? method_getTypeEncoding(event) : NULL;
     const char *disconnectTypes = disconnect ? method_getTypeEncoding(disconnect) : NULL;
     const char *sendTypes = send ? method_getTypeEncoding(send) : NULL;
-    // Check the entire supported ABI before changing any implementation.
+    // Admit the method calling conventions before changing any implementation.
+    // Objective-C encoding identifies a block return, not its invoke signature;
+    // that signature remains a version-specific runtime contract.
     if (!commandTypes || strcmp(commandTypes, "v32@0:8S16*20S28") != 0
         || !completeTypes || strcmp(completeTypes, "v32@0:8C16*20C28") != 0
         || !eventTypes || strcmp(eventTypes, "v32@0:8C16*20C28") != 0
         || !disconnectTypes || strcmp(disconnectTypes, "v32@0:8C16*20C28") != 0
-        || !sendTypes || strcmp(sendTypes, "C28@0:8*16S24") != 0 || !receive) {
+        || !sendTypes || strcmp(sendTypes, "C28@0:8*16S24") != 0
+        || !receive || strcmp(method_getTypeEncoding(receive), "@?16@0:8") != 0
+        || !queue || strcmp(method_getTypeEncoding(queue), "@16@0:8") != 0
+        || !shared || strcmp(method_getTypeEncoding(shared), "@16@0:8") != 0) {
         os_log_error(OS_LOG_DEFAULT, "VPBluetoothController unsupported BTVC runtime; hooks disabled");
         return YES;
     }

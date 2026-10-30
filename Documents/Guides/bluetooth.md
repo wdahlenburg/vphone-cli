@@ -78,6 +78,8 @@ as a whole typed field.
   Start with one guest app and one physical peripheral until concurrent-device
   behavior has hardware coverage. A helper/guest-controller restart
   can require reconnecting the app; transparent recovery is not promised.
+- Host transport backpressure disconnects the bridge instead of blocking the VM's UI.
+  Indications are queued until the guest confirms the previous indication.
 - Reads of actively notifying characteristics return ATT Request Not Supported:
   CoreBluetooth uses the same callback for reads and notifications without
   request identity. Service Changed/database invalidation remains incomplete.

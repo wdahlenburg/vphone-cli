@@ -227,6 +227,13 @@ test-injection-environment:
 
 test-bluetooth-controller:
 	@mkdir -p $(OUT)
+	xcrun --sdk macosx clang -fobjc-arc -Wall -Wextra -Werror \
+		-o $(OUT)/BluetoothControllerABITests Tests/BluetoothControllerABITests.m \
+		BluetoothController/VPhoneBluetoothHCICommand.c -framework Foundation
+	@$(OUT)/BluetoothControllerABITests receive
+	@$(OUT)/BluetoothControllerABITests queue
+	@$(OUT)/BluetoothControllerABITests shared
+	@mkdir -p $(OUT)
 	xcrun --sdk macosx clang -Wall -Wextra -Werror -IBluetoothController \
 		-o $(OUT)/BluetoothControllerTests \
 		Tests/BluetoothControllerTests.c BluetoothController/VPhoneBluetoothHCICommand.c

@@ -4608,6 +4608,27 @@ Not Supported because CoreBluetooth does not identify whether a value callback
 is a read response or a notification. Service Changed handling and transparent
 restart recovery still need integration work.
 
+### Review follow-up: fragmented transport and runtime admission
+
+The host reassembles bounded ATT L2CAP payloads across HCI ACL start and
+continuation packets within each native connection lifetime. Orphaned,
+wrong-handle, oversized and overrun fragments are discarded; a new start
+replaces unfinished data. Tests feed literal split packets into the production
+reassembler. Physical BTVC fragmentation still requires hardware validation.
+
+The installer resolves the scan patch before installing vphoned's launchd
+configuration, and chooses the Bluetooth daemon from the resulting live patch
+state. This preserves the daemon when a requested revert fails and avoids
+installing it on a first-time patch failure. Individual filesystem failures
+remain reported by the existing installer failure handling; this is not an
+atomic transaction across guest files.
+
+Runtime admission also validates the block getter, dispatch-queue getter and
+shared-manager method encodings before swizzling. A block-return encoding does
+not describe the block's invocation signature; that private contract still
+requires version-specific validation. Negative runtime tests verify that each
+incompatible getter leaves native methods untouched.
+
 ### Version and verification evidence
 
 The prototype's iOS 26.6.2 guest discovered a physical peripheral, completed
