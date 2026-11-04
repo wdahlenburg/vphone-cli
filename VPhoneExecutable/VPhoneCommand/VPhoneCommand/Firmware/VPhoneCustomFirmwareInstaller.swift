@@ -1707,9 +1707,10 @@ struct VPhoneCustomFirmwareInstaller {
             ("dyld-exp-hv_vmm", "patch-hv-vmm-dsc", [dsc]),
             ("dyld-cfw-camera", "patch-camera-dsc", [dsc, DyldSharedCacheChunkSet.mainCacheURL(in: URL(fileURLWithPath: dsc)).path]),
         ]
-        // The implementation has been inspected on 23G90 only. Keep the
+        // The implementation has been inspected on iOS 26.5 and 26.6. Keep the
         // legacy no-plan installer from widening the declaration's version gate.
-        if version.hasPrefix("26.6.") || version == "26.6" {
+        if version.hasPrefix("26.5.") || version == "26.5"
+            || version.hasPrefix("26.6.") || version == "26.6" {
             dyld.append((DyldSharedCacheVideoSubscriberAccountPatcher.patchID, "patch-video-subscriber-account", [dsc]))
         }
         try applyDyldPatches(
