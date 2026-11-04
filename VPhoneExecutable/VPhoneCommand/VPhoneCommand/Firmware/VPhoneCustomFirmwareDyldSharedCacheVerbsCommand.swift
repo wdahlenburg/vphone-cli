@@ -87,6 +87,7 @@ enum VPhoneCustomFirmwareDyldSharedCacheVerbs {
             VPhoneCustomFirmwarePatchLockdownModeCommand.self,
             VPhoneCustomFirmwarePatchMISTrustAuthCommand.self,
             VPhoneCustomFirmwarePatchCameraDyldSharedCacheCommand.self,
+            VPhoneCustomFirmwarePatchVideoSubscriberAccountCommand.self,
         ]
     }
 
@@ -716,5 +717,26 @@ struct VPhoneCustomFirmwareDyldSharedCacheRevertCommand: ParsableCommand {
         try remaining.encoded().write(to: url, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: url.path)
         print("  [+] reverted \(present.count) dyld patch(es): \(present.sorted().joined(separator: ", "))")
+    }
+}
+
+struct VPhoneCustomFirmwarePatchVideoSubscriberAccountCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "patch-video-subscriber-account",
+        abstract: "Keep rejected TV subscriptions from raising SDK-linked misuse exceptions",
+    )
+
+    @Argument(transform: URL.init(fileURLWithPath:)) var chunksDirectory: URL
+    @Flag(name: .customLong("dry-run")) var dryRun = false
+    @OptionGroup var undo: DyldSharedCacheUndoOptions
+
+    func run() throws {
+        var captured = DyldSharedCacheUndoLog()
+        try DyldSharedCacheVideoSubscriberAccountPatcher.patch(
+            chunksDirectory: chunksDirectory, dryRun: dryRun,
+            captureUndo: undo.captures, onUndo: { captured.merge($0) },
+            log: VPhoneCustomFirmwareDyldSharedCacheVerbs.stdout,
+        )
+        try undo.persist(captured, dryRun: dryRun)
     }
 }

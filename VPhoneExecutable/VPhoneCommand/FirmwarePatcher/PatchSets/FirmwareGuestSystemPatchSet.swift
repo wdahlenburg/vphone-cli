@@ -239,6 +239,13 @@ public enum FirmwareGuestSystemPatchSet {
                 bootEssential: true,
             ),
             VPhonePatchDeclaration(
+                identifier: "dyld-cfw-video_subscriber_account",
+                title: "TV subscription exception compatibility",
+                summary: "Uses VideoSubscriberAccount's legacy log-and-reject policy instead of throwing misuse exceptions. Subscription validation and entitlement checks remain enabled.",
+                target: .dyldSharedCache,
+                applicability: VPhonePatchApplicability(iOSBase: .release(major: 26, minor: 6)),
+            ),
+            VPhonePatchDeclaration(
                 identifier: "dyld-exp-mis_trust_auth",
                 title: "MIS online authorization",
                 summary: """

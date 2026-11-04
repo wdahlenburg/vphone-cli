@@ -1,3 +1,12 @@
+
+> **VideoSubscriberAccount compatibility (2026-11-04).** New
+> `dyld-cfw-video_subscriber_account` selects the framework's existing
+> log-and-reject misuse policy on iOS 26.6, preventing subscription entitlement
+> exceptions from terminating SDK-linked apps. Entitlement decisions remain
+> unchanged. Applied to bbphone2 with undo capture and one page re-attested;
+> the installed policy and two affected-app cold launches were checked. See
+> [investigation](Guest/video_subscriber_account.md).
+
 # Patch Comparison: Regular / Development / Jailbreak / Experimental
 
 > **Camera session teardown (2026-10-29).** Source-only change in libcamfix.

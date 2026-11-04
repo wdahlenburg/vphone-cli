@@ -1707,6 +1707,11 @@ struct VPhoneCustomFirmwareInstaller {
             ("dyld-exp-hv_vmm", "patch-hv-vmm-dsc", [dsc]),
             ("dyld-cfw-camera", "patch-camera-dsc", [dsc, DyldSharedCacheChunkSet.mainCacheURL(in: URL(fileURLWithPath: dsc)).path]),
         ]
+        // The implementation has been inspected on 23G90 only. Keep the
+        // legacy no-plan installer from widening the declaration's version gate.
+        if version.hasPrefix("26.6.") || version == "26.6" {
+            dyld.append((DyldSharedCacheVideoSubscriberAccountPatcher.patchID, "patch-video-subscriber-account", [dsc]))
+        }
         try applyDyldPatches(
             dyld, dsc: dsc, cacheRelative: cacheRelative, system: system, plan: plan, priorGuest: priorGuest,
             live: &live, failures: &failures,
